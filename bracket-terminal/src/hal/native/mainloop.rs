@@ -1,4 +1,6 @@
 use super::BACKEND;
+use super::NativeInitSettings;
+use super::init::{NativeRuntime, init_runtime};
 use crate::gl_error_wrap;
 use crate::hal::*;
 use crate::prelude::{BACKEND_INTERNAL, BEvent, BTerm, GameState, INPUT};
@@ -10,10 +12,12 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
 use winit::{
+    application::ApplicationHandler,
     dpi::PhysicalSize,
-    event::{ElementState, Event, MouseButton, WindowEvent},
-    event_loop::ControlFlow,
+    event::{ElementState, MouseButton, StartCause, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow},
     keyboard::{KeyCode, PhysicalKey},
+    window::WindowId,
 };
 
 const TICK_TYPE: ControlFlow = ControlFlow::Poll;
@@ -111,194 +115,320 @@ struct ResizeEvent {
     send_event: bool,
 }
 
-pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<()> {
-    let now = Instant::now();
-    let mut prev_seconds = now.elapsed().as_secs();
-    let mut prev_ms = now.elapsed().as_millis();
-    let mut frames = 0;
+pub fn main_loop<GS: GameState>(bterm: BTerm, gamestate: GS) -> BResult<()> {
+    let wrap = { BACKEND.lock().context_wrapper.take() };
+    let wrap = wrap.ok_or("Native OpenGL context was not initialized")?;
 
-    {
-        let be = BACKEND.lock();
-        let gl = be.gl.as_ref().unwrap();
-        let mut bit = BACKEND_INTERNAL.lock();
-        for f in bit.fonts.iter_mut() {
-            f.setup_gl_texture(gl)?;
-        }
+    let mut app = NativeApp::new(bterm, gamestate, wrap.init);
+    wrap.el.run_app(&mut app)?;
 
-        for s in bit.sprite_sheets.iter_mut() {
-            let mut f = Font::new(s.filename.to_string(), 1, 1, (1, 1));
-            f.setup_gl_texture(gl)?;
-            s.backing = Some(Rc::new(Box::new(f)));
+    if let Some(error) = app.error {
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+
+struct NativeApp<GS: GameState> {
+    bterm: BTerm,
+    gamestate: GS,
+    init: Option<NativeInitSettings>,
+    runtime: Option<NativeRuntime>,
+    queued_resize_event: Option<ResizeEvent>,
+    now: Instant,
+    prev_seconds: u64,
+    prev_ms: u128,
+    frames: i32,
+    error: Option<Box<dyn std::error::Error + Send + Sync>>,
+    #[cfg(feature = "low_cpu")]
+    spin_sleeper: spin_sleep::SpinSleeper,
+}
+
+impl<GS: GameState> NativeApp<GS> {
+    fn new(bterm: BTerm, gamestate: GS, init: NativeInitSettings) -> Self {
+        let now = Instant::now();
+        Self {
+            bterm,
+            gamestate,
+            init: Some(init),
+            runtime: None,
+            queued_resize_event: None,
+            now,
+            prev_seconds: now.elapsed().as_secs(),
+            prev_ms: now.elapsed().as_millis(),
+            frames: 0,
+            error: None,
+            #[cfg(feature = "low_cpu")]
+            spin_sleeper: spin_sleep::SpinSleeper::default(),
         }
     }
 
-    // We're doing a little dance here to get around lifetime/borrow checking.
-    // Removing the context data from BTerm in an atomic swap, so it isn't borrowed after move.
-    let wrap = { BACKEND.lock().context_wrapper.take() };
-    let unwrap = wrap.unwrap();
+    fn fail(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    ) {
+        self.error = Some(error);
+        event_loop.exit();
+    }
 
-    let el = unwrap.el;
-    let window = unwrap.window;
-    let gl_context = unwrap.gl_context;
-    let mut gl_surface = unwrap.gl_surface;
+    fn initialize(&mut self, event_loop: &ActiveEventLoop) -> BResult<()> {
+        if self.runtime.is_some() {
+            return Ok(());
+        }
 
-    on_resize(&mut bterm, window.inner_size(), window.scale_factor(), true)?; // Additional resize to handle some X11 cases
+        let init = self
+            .init
+            .take()
+            .ok_or("Native OpenGL context was already initialized")?;
+        let runtime = init_runtime(event_loop, init)?;
+        setup_gl_resources()?;
+        on_resize(
+            &mut self.bterm,
+            runtime.window.inner_size(),
+            runtime.window.scale_factor(),
+            true,
+        )?;
+        self.runtime = Some(runtime);
+        Ok(())
+    }
 
-    let mut queued_resize_event: Option<ResizeEvent> = None;
-    #[cfg(feature = "low_cpu")]
-    let spin_sleeper = spin_sleep::SpinSleeper::default();
-    let my_window_id = window.id();
-
-    #[allow(deprecated)]
-    el.run(move |event, event_loop| {
-        event_loop.set_control_flow(TICK_TYPE);
-        let wait_time = BACKEND.lock().frame_sleep_time.unwrap_or(33); // Hoisted to reduce locks
-
-        if bterm.quitting {
-            event_loop.exit();
+    fn handle_window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) -> BResult<()> {
+        let runtime_window_id = match self.runtime.as_ref() {
+            Some(runtime) => runtime.window.id(),
+            None => return Ok(()),
+        };
+        if window_id != runtime_window_id {
+            return Ok(());
         }
 
         match event {
-            Event::AboutToWait => {
-                window.set_cursor_visible(bterm.mouse_visible);
-                window.request_redraw();
+            WindowEvent::RedrawRequested => self.redraw()?,
+            WindowEvent::Moved(physical_position) => {
+                self.bterm.on_event(BEvent::Moved {
+                    new_position: Point::new(physical_position.x, physical_position.y),
+                });
+                self.queue_current_resize(true);
             }
-            Event::WindowEvent { window_id, event } => {
-                if window_id != my_window_id {
-                    return;
+            WindowEvent::Resized(physical_size) => {
+                self.queue_resize(physical_size, true);
+            }
+            WindowEvent::CloseRequested => {
+                if !INPUT.lock().use_events {
+                    event_loop.exit();
+                } else {
+                    self.bterm.on_event(BEvent::CloseRequested);
                 }
-
-                match event {
-                    WindowEvent::RedrawRequested => {
-                        let frame_timer = Instant::now();
-                        if window.inner_size().width == 0 {
-                            return;
-                        }
-
-                        let execute_ms = now.elapsed().as_millis() as u64 - prev_ms as u64;
-                        if execute_ms >= wait_time {
-                            if let Some(resize) = &queued_resize_event {
-                                resize_surface(&mut gl_surface, &gl_context, resize.physical_size);
-                                on_resize(
-                                    &mut bterm,
-                                    resize.physical_size,
-                                    resize.dpi_scale_factor,
-                                    resize.send_event,
-                                )
-                                .unwrap();
-                            }
-                            queued_resize_event = None;
-
-                            tock(
-                                &mut bterm,
-                                window.scale_factor() as f32,
-                                &mut gamestate,
-                                &mut frames,
-                                &mut prev_seconds,
-                                &mut prev_ms,
-                                &now,
-                            );
-                            gl_surface.swap_buffers(&gl_context).unwrap();
-                            clear_input_state(&mut bterm);
-                        }
-
-                        let time_since_last_frame = frame_timer.elapsed().as_millis() as u64;
-                        if time_since_last_frame < wait_time {
-                            let delay = u64::min(33, wait_time - time_since_last_frame);
-                            #[cfg(not(feature = "low_cpu"))]
-                            {
-                                std::thread::sleep(std::time::Duration::from_millis(delay));
-                            }
-                            #[cfg(feature = "low_cpu")]
-                            spin_sleeper.sleep(std::time::Duration::from_millis(delay));
-                        }
-                    }
-                    WindowEvent::Moved(physical_position) => {
-                        bterm.on_event(BEvent::Moved {
-                            new_position: Point::new(physical_position.x, physical_position.y),
-                        });
-
-                        let scale_factor = window.scale_factor();
-                        let physical_size = window.inner_size();
-                        resize_surface(&mut gl_surface, &gl_context, physical_size);
-                        queued_resize_event = Some(ResizeEvent {
-                            physical_size,
-                            dpi_scale_factor: scale_factor,
-                            send_event: true,
-                        });
-                    }
-                    WindowEvent::Resized(physical_size) => {
-                        let scale_factor = window.scale_factor();
-                        resize_surface(&mut gl_surface, &gl_context, physical_size);
-                        queued_resize_event = Some(ResizeEvent {
-                            physical_size,
-                            dpi_scale_factor: scale_factor,
-                            send_event: true,
-                        });
-                    }
-                    WindowEvent::CloseRequested => {
-                        if !INPUT.lock().use_events {
-                            event_loop.exit();
-                        } else {
-                            bterm.on_event(BEvent::CloseRequested);
-                        }
-                    }
-                    WindowEvent::Focused(focused) => {
-                        bterm.on_event(BEvent::Focused { focused });
-                    }
-                    WindowEvent::CursorMoved { position: pos, .. } => {
-                        bterm.on_mouse_position(pos.x, pos.y);
-                    }
-                    WindowEvent::CursorEntered { .. } => bterm.on_event(BEvent::CursorEntered),
-                    WindowEvent::CursorLeft { .. } => bterm.on_event(BEvent::CursorLeft),
-                    WindowEvent::MouseInput { button, state, .. } => {
-                        let button = match button {
-                            MouseButton::Left => 0,
-                            MouseButton::Right => 1,
-                            MouseButton::Middle => 2,
-                            MouseButton::Back => 3,
-                            MouseButton::Forward => 4,
-                            MouseButton::Other(num) => 5 + num as usize,
-                        };
-                        bterm.on_mouse_button(button, state == ElementState::Pressed);
-                    }
-                    WindowEvent::ScaleFactorChanged {
-                        scale_factor,
-                        mut inner_size_writer,
-                        ..
-                    } => {
-                        let physical_size = window.inner_size();
-                        let _ = inner_size_writer.request_inner_size(physical_size);
-                        resize_surface(&mut gl_surface, &gl_context, physical_size);
-                        on_resize(&mut bterm, physical_size, scale_factor, false).unwrap();
-                        bterm.on_event(BEvent::ScaleFactorChanged {
-                            new_size: Point::new(physical_size.width, physical_size.height),
-                            dpi_scale_factor: scale_factor as f32,
-                        })
-                    }
-                    WindowEvent::KeyboardInput { event, .. } => {
-                        if let Some(key) = physical_key_to_virtual_keycode(&event.physical_key) {
-                            bterm.on_key(key, 0, event.state == ElementState::Pressed);
-                        }
-                        if event.state == ElementState::Pressed
-                            && let Some(text) = event.text.as_ref()
-                        {
-                            for ch in text.chars() {
-                                bterm.on_event(BEvent::Character { c: ch });
-                            }
-                        }
-                    }
-                    WindowEvent::ModifiersChanged(modifiers) => {
-                        bterm.shift = modifiers.state().shift_key();
-                        bterm.alt = modifiers.state().alt_key();
-                        bterm.control = modifiers.state().control_key();
-                    }
-                    _ => {}
+            }
+            WindowEvent::Focused(focused) => {
+                self.bterm.on_event(BEvent::Focused { focused });
+            }
+            WindowEvent::CursorMoved { position: pos, .. } => {
+                self.bterm.on_mouse_position(pos.x, pos.y);
+            }
+            WindowEvent::CursorEntered { .. } => self.bterm.on_event(BEvent::CursorEntered),
+            WindowEvent::CursorLeft { .. } => self.bterm.on_event(BEvent::CursorLeft),
+            WindowEvent::MouseInput { button, state, .. } => {
+                let button = match button {
+                    MouseButton::Left => 0,
+                    MouseButton::Right => 1,
+                    MouseButton::Middle => 2,
+                    MouseButton::Back => 3,
+                    MouseButton::Forward => 4,
+                    MouseButton::Other(num) => 5 + num as usize,
+                };
+                self.bterm
+                    .on_mouse_button(button, state == ElementState::Pressed);
+            }
+            WindowEvent::ScaleFactorChanged {
+                scale_factor,
+                mut inner_size_writer,
+                ..
+            } => {
+                let physical_size = self
+                    .runtime
+                    .as_ref()
+                    .map(|runtime| runtime.window.inner_size())
+                    .unwrap_or_default();
+                let _ = inner_size_writer.request_inner_size(physical_size);
+                self.resize_surface(physical_size);
+                on_resize(&mut self.bterm, physical_size, scale_factor, false)?;
+                self.bterm.on_event(BEvent::ScaleFactorChanged {
+                    new_size: Point::new(physical_size.width, physical_size.height),
+                    dpi_scale_factor: scale_factor as f32,
+                });
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let Some(key) = physical_key_to_virtual_keycode(&event.physical_key) {
+                    self.bterm
+                        .on_key(key, 0, event.state == ElementState::Pressed);
                 }
+                if event.state == ElementState::Pressed
+                    && let Some(text) = event.text.as_ref()
+                {
+                    for ch in text.chars() {
+                        self.bterm.on_event(BEvent::Character { c: ch });
+                    }
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.bterm.shift = modifiers.state().shift_key();
+                self.bterm.alt = modifiers.state().alt_key();
+                self.bterm.control = modifiers.state().control_key();
             }
             _ => {}
         }
-    })?;
+
+        Ok(())
+    }
+
+    fn redraw(&mut self) -> BResult<()> {
+        let frame_timer = Instant::now();
+        let wait_time = BACKEND.lock().frame_sleep_time.unwrap_or(33);
+
+        if self
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.window.inner_size().width == 0)
+            .unwrap_or(true)
+        {
+            return Ok(());
+        }
+
+        let execute_ms = self.now.elapsed().as_millis() as u64 - self.prev_ms as u64;
+        if execute_ms >= wait_time {
+            if let Some(resize) = self.queued_resize_event.take() {
+                self.resize_surface(resize.physical_size);
+                on_resize(
+                    &mut self.bterm,
+                    resize.physical_size,
+                    resize.dpi_scale_factor,
+                    resize.send_event,
+                )?;
+            }
+
+            let scale_factor = self
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.window.scale_factor() as f32)
+                .unwrap_or(1.0);
+            tock(
+                &mut self.bterm,
+                scale_factor,
+                &mut self.gamestate,
+                &mut self.frames,
+                &mut self.prev_seconds,
+                &mut self.prev_ms,
+                &self.now,
+            )?;
+
+            if let Some(runtime) = self.runtime.as_mut() {
+                runtime.gl_surface.swap_buffers(&runtime.gl_context)?;
+            }
+            clear_input_state(&mut self.bterm);
+        }
+
+        let time_since_last_frame = frame_timer.elapsed().as_millis() as u64;
+        if time_since_last_frame < wait_time {
+            let delay = u64::min(33, wait_time - time_since_last_frame);
+            #[cfg(not(feature = "low_cpu"))]
+            {
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+            }
+            #[cfg(feature = "low_cpu")]
+            self.spin_sleeper
+                .sleep(std::time::Duration::from_millis(delay));
+        }
+
+        Ok(())
+    }
+
+    fn queue_current_resize(&mut self, send_event: bool) {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return;
+        };
+        let physical_size = runtime.window.inner_size();
+        self.queue_resize(physical_size, send_event);
+    }
+
+    fn queue_resize(&mut self, physical_size: PhysicalSize<u32>, send_event: bool) {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return;
+        };
+        let scale_factor = runtime.window.scale_factor();
+        self.resize_surface(physical_size);
+        self.queued_resize_event = Some(ResizeEvent {
+            physical_size,
+            dpi_scale_factor: scale_factor,
+            send_event,
+        });
+    }
+
+    fn resize_surface(&mut self, physical_size: PhysicalSize<u32>) {
+        if let Some(runtime) = self.runtime.as_mut() {
+            resize_surface(&mut runtime.gl_surface, &runtime.gl_context, physical_size);
+        }
+    }
+}
+
+impl<GS: GameState> ApplicationHandler for NativeApp<GS> {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, _cause: StartCause) {
+        event_loop.set_control_flow(TICK_TYPE);
+        if self.bterm.quitting {
+            event_loop.exit();
+        }
+    }
+
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(TICK_TYPE);
+        if let Err(error) = self.initialize(event_loop) {
+            self.fail(event_loop, error);
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if let Err(error) = self.handle_window_event(event_loop, window_id, event) {
+            self.fail(event_loop, error);
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(TICK_TYPE);
+        if self.bterm.quitting {
+            event_loop.exit();
+            return;
+        }
+
+        if let Some(runtime) = self.runtime.as_ref() {
+            runtime.window.set_cursor_visible(self.bterm.mouse_visible);
+            runtime.window.request_redraw();
+        }
+    }
+}
+
+fn setup_gl_resources() -> BResult<()> {
+    let be = BACKEND.lock();
+    let gl = be.gl.as_ref().unwrap();
+    let mut bit = BACKEND_INTERNAL.lock();
+    for f in bit.fonts.iter_mut() {
+        f.setup_gl_texture(gl)?;
+    }
+
+    for s in bit.sprite_sheets.iter_mut() {
+        let mut f = Font::new(s.filename.to_string(), 1, 1, (1, 1));
+        f.setup_gl_texture(gl)?;
+        s.backing = Some(Rc::new(Box::new(f)));
+    }
 
     Ok(())
 }
@@ -459,7 +589,7 @@ fn tock<GS: GameState>(
     prev_seconds: &mut u64,
     prev_ms: &mut u128,
     now: &Instant,
-) {
+) -> BResult<()> {
     // Check that the console backings match our actual consoles
     check_console_backing();
 
@@ -509,7 +639,7 @@ fn tock<GS: GameState>(
     gamestate.tick(bterm);
 
     // Tell each console to draw itself
-    render_consoles().unwrap();
+    render_consoles()?;
 
     // If there is a GL callback, call it now
     {
@@ -601,9 +731,10 @@ fn tock<GS: GameState>(
                 w,
                 h,
                 image::ColorType::Rgba8,
-            )
-            .expect("Failed to save buffer to the specified path");
+            )?;
         }
         be.request_screenshot = None;
     }
+
+    Ok(())
 }

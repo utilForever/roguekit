@@ -51,9 +51,14 @@ unsafe impl Sync for PlatformGL {}
 
 pub struct WrappedContext {
     pub el: winit::event_loop::EventLoop<()>,
-    pub window: winit::window::Window,
-    pub gl_context: glutin::context::PossiblyCurrentContext,
-    pub gl_surface: glutin::surface::Surface<glutin::surface::WindowSurface>,
+    pub init: NativeInitSettings,
+}
+
+pub struct NativeInitSettings {
+    pub width_pixels: u32,
+    pub height_pixels: u32,
+    pub window_title: String,
+    pub platform_hints: InitHints,
 }
 
 pub struct InitHints {
