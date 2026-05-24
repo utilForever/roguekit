@@ -68,6 +68,21 @@ assert_eq!(curve.first(), Some(Point::new(0, 0)));
 assert_eq!(curve.last(), Some(Point::new(9, 2)));
 ```
 
+Curves can also be evaluated as Bezier curves:
+
+```rust
+use bracket_geometry::prelude::*;
+let curve = Curve::new(vec![Point::new(0, 0), Point::new(4, 8), Point::new(9, 2)]);
+let midpoint = curve.bezier_point(0.5).unwrap();
+let sampled_points = curve.bezier_points(20);
+```
+
+You can run the Bezier curve example with:
+
+```sh
+cargo run -p bracket-geometry --example bezier_curve
+```
+
 ## Line Plotting
 
 Line plotting is provided using Bresenham and vector algorithms. You can return points in the line as either a vector of `Point` objects, or an iterator.
