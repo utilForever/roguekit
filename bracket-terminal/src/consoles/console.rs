@@ -4,6 +4,9 @@ use bracket_geometry::prelude::{Point, Rect};
 use bracket_rex::prelude::XpLayer;
 use std::any::Any;
 
+#[cfg(test)]
+use mockall::automock;
+
 /// The internal storage type for tiles in a simple console.
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub struct Tile {
@@ -25,6 +28,7 @@ pub enum CharacterTranslationMode {
     Unicode,
 }
 
+#[cfg_attr(test, automock)]
 /// Trait that must be implemented by console types.
 pub trait Console {
     /// Gets the dimensions of the console in characters
@@ -205,4 +209,100 @@ pub trait Console {
 
 pub fn log<S: ToString>(message: S) {
     crate::hal::log(&message.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::TestConsole;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(0, 0, true)]
+    #[case(79, 0, true)]
+    #[case(0, 49, true)]
+    #[case(79, 49, true)]
+    #[case(40, 25, true)]
+    #[case(-1, 0, false)]
+    #[case(0, -1, false)]
+    #[case(80, 0, false)]
+    #[case(0, 50, false)]
+    #[case(80, 50, false)]
+    fn in_bounds_without_clipping(#[case] x: i32, #[case] y: i32, #[case] expected: bool) {
+        let console = TestConsole::new(80, 50);
+        assert_eq!(console.in_bounds(x, y), expected);
+    }
+
+    #[rstest]
+    #[case(10, 10, true)]
+    #[case(29, 10, true)]
+    #[case(10, 24, true)]
+    #[case(29, 24, true)]
+    #[case(20, 15, true)]
+    #[case(9, 10, false)]
+    #[case(10, 9, false)]
+    #[case(30, 10, false)]
+    #[case(10, 25, false)]
+    #[case(30, 25, false)]
+    fn in_bounds_respects_clipping_rectangle(
+        #[case] x: i32,
+        #[case] y: i32,
+        #[case] expected: bool,
+    ) {
+        let console = TestConsole::new(80, 50).with_clipping(Rect::with_size(10, 10, 20, 15));
+        assert_eq!(console.in_bounds(x, y), expected);
+    }
+
+    #[rstest]
+    #[case(0, 0, true)]
+    #[case(79, 49, true)]
+    #[case(-1, 0, false)]
+    #[case(0, -1, false)]
+    #[case(80, 0, false)]
+    #[case(0, 50, false)]
+    fn in_bounds_with_large_clipping_still_respects_console_bounds(
+        #[case] x: i32,
+        #[case] y: i32,
+        #[case] expected: bool,
+    ) {
+        let console = TestConsole::new(80, 50).with_clipping(Rect::with_size(-10, -10, 100, 100));
+        assert_eq!(console.in_bounds(x, y), expected);
+    }
+
+    #[rstest]
+    #[case(0, 0, Some(0))]
+    #[case(1, 0, Some(1))]
+    #[case(79, 0, Some(79))]
+    #[case(0, 1, Some(80))]
+    #[case(10, 2, Some(170))]
+    #[case(79, 49, Some(3999))]
+    #[case(-1, 0, None)]
+    #[case(0, -1, None)]
+    #[case(80, 0, None)]
+    #[case(0, 50, None)]
+    #[case(80, 50, None)]
+    fn try_at_without_clipping(#[case] x: i32, #[case] y: i32, #[case] expected: Option<usize>) {
+        let console = TestConsole::new(80, 50);
+        assert_eq!(console.try_at(x, y), expected);
+    }
+
+    #[rstest]
+    #[case(10, 10, Some(810))]
+    #[case(29, 10, Some(829))]
+    #[case(10, 24, Some(1930))]
+    #[case(29, 24, Some(1949))]
+    #[case(20, 15, Some(1220))]
+    #[case(9, 10, None)]
+    #[case(10, 9, None)]
+    #[case(30, 10, None)]
+    #[case(10, 25, None)]
+    #[case(30, 25, None)]
+    fn try_at_respects_clipping_rectangle(
+        #[case] x: i32,
+        #[case] y: i32,
+        #[case] expected: Option<usize>,
+    ) {
+        let console = TestConsole::new(80, 50).with_clipping(Rect::with_size(10, 10, 20, 15));
+        assert_eq!(console.try_at(x, y), expected);
+    }
 }

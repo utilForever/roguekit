@@ -9,6 +9,10 @@ mod hal;
 mod initializer;
 mod input;
 pub mod rex;
+
+#[cfg(test)]
+mod test_utils;
+
 pub use bracket_embedding::prelude::{EMBED, embedded_resource, link_resource};
 
 pub type BResult<T> = anyhow::Result<T, Box<dyn std::error::Error + Send + Sync>>;

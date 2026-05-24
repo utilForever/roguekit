@@ -424,3 +424,369 @@ impl Console for SparseConsole {
         self.is_dirty = false;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    fn rgba(r: u8, g: u8, b: u8, a: u8) -> RGBA {
+        RGBA::from_u8(r, g, b, a)
+    }
+
+    #[test]
+    fn init_creates_empty_sparse_console() {
+        let console = SparseConsole::init(80, 50);
+
+        assert_eq!(console.get_char_size(), (80, 50));
+        assert!(console.tiles.is_empty());
+        assert!(console.is_dirty);
+        assert!(!console.needs_resize_internal);
+    }
+
+    #[rstest]
+    #[case(0, 0, 30)]
+    #[case(1, 0, 31)]
+    #[case(9, 0, 39)]
+    #[case(0, 1, 20)]
+    #[case(0, 2, 10)]
+    #[case(0, 3, 0)]
+    #[case(9, 3, 9)]
+    fn at_uses_bottom_origin_storage(#[case] x: i32, #[case] y: i32, #[case] expected: usize) {
+        let console = SparseConsole::init(10, 4);
+        assert_eq!(console.at(x, y), expected);
+    }
+
+    #[test]
+    fn sparse_console_at_mapping_differs_from_test_console_row_major_mapping() {
+        let sparse = SparseConsole::init(10, 4);
+
+        assert_eq!(sparse.at(0, 0), 30);
+        assert_eq!(sparse.at(0, 3), 0);
+    }
+
+    #[test]
+    fn print_appends_sparse_tiles_with_default_colors() {
+        let mut console = SparseConsole::init(10, 4);
+
+        console.clear_dirty();
+        console.print(2, 1, "AB");
+
+        assert!(console.is_dirty);
+        assert_eq!(console.tiles.len(), 2);
+        assert_eq!(console.tiles[0].idx, console.at(2, 1));
+        assert_eq!(console.tiles[0].glyph, 65);
+        assert_eq!(console.tiles[0].fg, RGBA::from_f32(1.0, 1.0, 1.0, 1.0));
+        assert_eq!(console.tiles[0].bg, RGBA::from_f32(0.0, 0.0, 0.0, 1.0));
+        assert_eq!(console.tiles[1].idx, console.at(3, 1));
+        assert_eq!(console.tiles[1].glyph, 66);
+    }
+
+    #[test]
+    fn print_clips_at_right_edge() {
+        let mut console = SparseConsole::init(3, 1);
+
+        console.print(1, 0, "ABCD");
+
+        assert_eq!(console.tiles.len(), 2);
+        assert_eq!(console.tiles[0].idx, console.at(1, 0));
+        assert_eq!(console.tiles[0].glyph, 65);
+        assert_eq!(console.tiles[1].idx, console.at(2, 0));
+        assert_eq!(console.tiles[1].glyph, 66);
+    }
+
+    #[test]
+    fn print_color_appends_sparse_tiles_with_given_colors() {
+        let mut console = SparseConsole::init(10, 4);
+        let fg = rgba(1, 2, 3, 4);
+        let bg = rgba(5, 6, 7, 8);
+
+        console.print_color(1, 2, fg, bg, "XY");
+
+        assert_eq!(console.tiles.len(), 2);
+        assert_eq!(console.tiles[0].idx, console.at(1, 2));
+        assert_eq!(console.tiles[0].glyph, 88);
+        assert_eq!(console.tiles[0].fg, fg);
+        assert_eq!(console.tiles[0].bg, bg);
+        assert_eq!(console.tiles[1].idx, console.at(2, 2));
+        assert_eq!(console.tiles[1].glyph, 89);
+        assert_eq!(console.tiles[1].fg, fg);
+        assert_eq!(console.tiles[1].bg, bg);
+    }
+
+    #[test]
+    fn set_appends_sparse_tile_when_in_bounds() {
+        let mut console = SparseConsole::init(10, 4);
+        let fg = rgba(11, 12, 13, 14);
+        let bg = rgba(21, 22, 23, 24);
+
+        console.set(2, 1, fg, bg, 123);
+
+        assert_eq!(console.tiles.len(), 1);
+        assert_eq!(console.tiles[0].idx, console.at(2, 1));
+        assert_eq!(console.tiles[0].glyph, 123);
+        assert_eq!(console.tiles[0].fg, fg);
+        assert_eq!(console.tiles[0].bg, bg);
+    }
+
+    #[test]
+    fn set_ignores_out_of_bounds_coordinates() {
+        let mut console = SparseConsole::init(3, 1);
+
+        console.set(3, 0, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), 65);
+        console.set(-1, 0, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), 66);
+        console.set(0, 1, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), 67);
+
+        assert!(console.tiles.is_empty());
+    }
+
+    #[test]
+    fn set_bg_updates_existing_tile_backgrounds_with_same_idx() {
+        let mut console = SparseConsole::init(10, 4);
+        let old_bg = rgba(1, 1, 1, 255);
+        let new_bg = rgba(9, 8, 7, 6);
+
+        console.set(2, 1, rgba(1, 2, 3, 4), old_bg, 65);
+        console.set(2, 1, rgba(5, 6, 7, 8), old_bg, 66);
+        console.set_bg(2, 1, new_bg);
+
+        assert_eq!(console.tiles.len(), 2);
+        assert!(
+            console
+                .tiles
+                .iter()
+                .all(|tile| tile.idx == console.at(2, 1) && tile.bg == new_bg)
+        );
+    }
+
+    #[test]
+    fn set_bg_creates_space_tile_when_no_existing_tile_matches() {
+        let mut console = SparseConsole::init(10, 4);
+        let bg = rgba(9, 8, 7, 6);
+
+        console.set_bg(2, 1, bg);
+
+        assert_eq!(console.tiles.len(), 1);
+        assert_eq!(console.tiles[0].idx, console.at(2, 1));
+        assert_eq!(console.tiles[0].glyph, to_cp437(' '));
+        assert_eq!(console.tiles[0].fg, rgba(0, 0, 0, 255));
+        assert_eq!(console.tiles[0].bg, bg);
+    }
+
+    #[test]
+    fn set_bg_ignores_out_of_bounds_coordinates() {
+        let mut console = SparseConsole::init(3, 1);
+
+        console.set_bg(3, 0, rgba(9, 8, 7, 6));
+        console.set_bg(-1, 0, rgba(9, 8, 7, 6));
+        console.set_bg(0, 1, rgba(9, 8, 7, 6));
+
+        assert!(console.tiles.is_empty());
+    }
+
+    #[test]
+    fn cls_clears_sparse_tiles_and_marks_dirty() {
+        let mut console = SparseConsole::init(10, 4);
+
+        console.print(0, 0, "ABC");
+        console.clear_dirty();
+        assert!(!console.is_dirty);
+
+        console.cls();
+        assert!(console.is_dirty);
+        assert!(console.tiles.is_empty());
+    }
+
+    #[test]
+    fn cls_bg_clears_sparse_tiles_and_ignores_background() {
+        let mut console = SparseConsole::init(10, 4);
+
+        console.print(0, 0, "ABC");
+        console.clear_dirty();
+        assert!(!console.is_dirty);
+
+        console.cls_bg(rgba(1, 2, 3, 4));
+        assert!(console.is_dirty);
+        assert!(console.tiles.is_empty());
+    }
+
+    #[test]
+    fn fill_region_adds_one_tile_per_in_bounds_cell() {
+        let mut console = SparseConsole::init(5, 5);
+        let fg = rgba(1, 1, 1, 255);
+        let bg = rgba(2, 2, 2, 255);
+
+        console.fill_region(Rect::with_size(1, 1, 2, 3), 88, fg, bg);
+
+        assert_eq!(console.tiles.len(), 6);
+        assert!(
+            console
+                .tiles
+                .iter()
+                .all(|tile| tile.glyph == 88 && tile.fg == fg && tile.bg == bg)
+        );
+    }
+
+    #[test]
+    fn print_centered_uses_console_width() {
+        let mut console = SparseConsole::init(10, 2);
+
+        console.print_centered(0, "ABCD");
+
+        assert_eq!(console.tiles.len(), 4);
+        assert_eq!(console.tiles[0].idx, console.at(3, 0));
+        assert_eq!(console.tiles[1].idx, console.at(4, 0));
+        assert_eq!(console.tiles[2].idx, console.at(5, 0));
+        assert_eq!(console.tiles[3].idx, console.at(6, 0));
+    }
+
+    #[test]
+    fn print_right_ends_before_given_x() {
+        let mut console = SparseConsole::init(10, 2);
+
+        console.print_right(8, 0, "ABC");
+
+        assert_eq!(console.tiles.len(), 3);
+        assert_eq!(console.tiles[0].idx, console.at(5, 0));
+        assert_eq!(console.tiles[1].idx, console.at(6, 0));
+        assert_eq!(console.tiles[2].idx, console.at(7, 0));
+    }
+
+    #[test]
+    fn printer_supports_inline_colored_text() {
+        let mut console = SparseConsole::init(20, 2);
+
+        console.printer(0, 0, "#[red]A#[]B", TextAlign::Left, None);
+
+        assert_eq!(console.tiles.len(), 2);
+        assert_eq!(console.tiles[0].glyph, to_cp437('A'));
+        assert_eq!(console.tiles[1].glyph, to_cp437('B'));
+    }
+
+    #[test]
+    fn set_offset_scales_offsets_by_console_dimensions() {
+        let mut console = SparseConsole::init(10, 20);
+
+        console.set_offset(1.0, -0.5);
+
+        assert_eq!(console.offset_x, 0.2);
+        assert_eq!(console.offset_y, -0.05);
+        assert!(console.is_dirty);
+    }
+
+    #[test]
+    fn set_scale_updates_scale_and_center() {
+        let mut console = SparseConsole::init(10, 20);
+
+        console.set_scale(2.5, 3, 4);
+
+        assert_eq!(console.get_scale(), (2.5, 3, 4));
+        assert!(console.is_dirty);
+    }
+
+    #[test]
+    fn clipping_round_trip() {
+        let mut console = SparseConsole::init(10, 20);
+        let clipping = Rect::with_size(1, 2, 3, 4);
+
+        assert_eq!(console.get_clipping(), None);
+
+        console.set_clipping(Some(clipping));
+        assert_eq!(console.get_clipping(), Some(clipping));
+    }
+
+    #[test]
+    fn clipping_limits_set() {
+        let mut console = SparseConsole::init(10, 5);
+
+        console.set_clipping(Some(Rect::with_size(2, 1, 3, 2)));
+        console.set(1, 1, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), 65);
+        console.set(2, 1, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), 66);
+        console.set(4, 2, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), 67);
+        console.set(5, 2, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), 68);
+
+        assert_eq!(console.tiles.len(), 2);
+        assert_eq!(console.tiles[0].glyph, 66);
+        assert_eq!(console.tiles[1].glyph, 67);
+    }
+
+    #[test]
+    fn alpha_methods_update_existing_tiles_only() {
+        let mut console = SparseConsole::init(10, 4);
+
+        console.print(0, 0, "AB");
+
+        console.set_all_fg_alpha(0.25);
+        assert!(console.tiles.iter().all(|tile| tile.fg.a == 0.25));
+
+        console.set_all_bg_alpha(0.5);
+        assert!(console.tiles.iter().all(|tile| tile.bg.a == 0.5));
+
+        console.set_all_alpha(0.75, 1.0);
+        assert!(
+            console
+                .tiles
+                .iter()
+                .all(|tile| tile.fg.a == 0.75 && tile.bg.a == 1.0)
+        );
+    }
+
+    #[test]
+    fn set_translation_mode_changes_unicode_print_behavior() {
+        let mut console = SparseConsole::init(3, 1);
+
+        console.set_translation_mode(CharacterTranslationMode::Unicode);
+        console.print(0, 0, "가");
+
+        assert_eq!(console.tiles[0].glyph, '가' as FontCharType);
+    }
+
+    #[test]
+    fn set_char_size_updates_dimensions_without_rebuilding_tiles() {
+        let mut console = SparseConsole::init(3, 2);
+
+        console.print(0, 0, "A");
+        console.set_char_size(5, 4);
+
+        assert_eq!(console.get_char_size(), (5, 4));
+        assert_eq!(console.tiles.len(), 1);
+        assert!(console.needs_resize_internal);
+    }
+
+    #[test]
+    fn resize_pixels_marks_dirty_without_changing_dimensions() {
+        let mut console = SparseConsole::init(80, 50);
+
+        console.clear_dirty();
+        console.resize_pixels(1024, 768);
+
+        assert!(console.is_dirty);
+        assert_eq!(console.get_char_size(), (80, 50));
+    }
+
+    #[test]
+    fn clear_dirty_resets_dirty_flag() {
+        let mut console = SparseConsole::init(80, 50);
+        assert!(console.is_dirty);
+
+        console.clear_dirty();
+        assert!(!console.is_dirty);
+    }
+
+    #[test]
+    fn as_any_allows_downcasting_to_sparse_console() {
+        let console = SparseConsole::init(80, 50);
+        assert!(console.as_any().downcast_ref::<SparseConsole>().is_some());
+    }
+
+    #[test]
+    fn as_any_mut_allows_mutable_downcasting_to_sparse_console() {
+        let mut console = SparseConsole::init(80, 50);
+        assert!(
+            console
+                .as_any_mut()
+                .downcast_mut::<SparseConsole>()
+                .is_some()
+        );
+    }
+}

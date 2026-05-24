@@ -52,6 +52,8 @@ webgpu = [ "wgpu", "pollster", "image", "bytemuck", "png" ]
 bracket-random = { path = "../bracket-random", version = "~0.8" }
 bracket-pathfinding = { path = "../bracket-pathfinding", version = "~0.8" }
 bracket-noise = { path = "../bracket-noise", version = "~0.8" }
+mockall = "0.14.0"
+rstest = "0.26.1"
 
 # criterion pulls in rayon, which fails to compile on wasm32. Benches don't run
 # on wasm anyway, so scope this to non-wasm targets.

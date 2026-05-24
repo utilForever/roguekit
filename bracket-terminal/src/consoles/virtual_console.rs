@@ -46,17 +46,22 @@ impl VirtualConsole {
     pub fn from_text(text: &str, width: usize) -> Self {
         let raw_lines = text.split('\n');
         let mut lines: Vec<String> = Vec::new();
+
         for line in raw_lines {
             let mut newline: String = String::from("");
 
-            line.chars().for_each(|c| {
+            for c in line.chars() {
                 newline.push(c);
-                if newline.len() > width {
-                    lines.push(newline.clone());
-                    newline.clear();
+
+                if newline.len() >= width {
+                    lines.push(newline);
+                    newline = String::new();
                 }
-            });
-            lines.push(newline.clone());
+            }
+
+            if !newline.is_empty() {
+                lines.push(newline);
+            }
         }
 
         let num_tiles: usize = width * lines.len();
@@ -436,4 +441,344 @@ impl Console for VirtualConsole {
 
     // Clears the dirty bit
     fn clear_dirty(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    fn rgba(r: f32, g: f32, b: f32, a: f32) -> RGBA {
+        RGBA::from_f32(r, g, b, a)
+    }
+
+    #[test]
+    fn new_creates_dense_console_with_expected_dimensions() {
+        let console = VirtualConsole::new(Point::new(80, 50));
+
+        assert_eq!(console.get_char_size(), (80, 50));
+        assert_eq!(console.tiles.len(), 80 * 50);
+        assert_eq!(console.get_clipping(), None);
+    }
+
+    #[rstest]
+    #[case(0, 0, 30)]
+    #[case(1, 0, 31)]
+    #[case(9, 0, 39)]
+    #[case(0, 1, 20)]
+    #[case(0, 2, 10)]
+    #[case(0, 3, 0)]
+    #[case(9, 3, 9)]
+    fn at_uses_bottom_origin_storage(#[case] x: i32, #[case] y: i32, #[case] expected: usize) {
+        let console = VirtualConsole::new(Point::new(10, 4));
+        assert_eq!(console.at(x, y), expected);
+    }
+
+    #[test]
+    fn virtual_console_at_mapping_differs_from_test_console_row_major_mapping() {
+        let virtual_console = VirtualConsole::new(Point::new(10, 4));
+
+        assert_eq!(virtual_console.at(0, 0), 30);
+        assert_eq!(virtual_console.at(0, 3), 0);
+    }
+
+    #[test]
+    fn cls_resets_all_tiles_to_space_white_on_black() {
+        let mut console = VirtualConsole::new(Point::new(3, 2));
+
+        console.set(1, 1, rgba(0.1, 0.2, 0.3, 0.4), rgba(0.5, 0.6, 0.7, 0.8), 99);
+        console.cls();
+
+        assert!(console.tiles.iter().all(|tile| {
+            tile.glyph == 32
+                && tile.fg == rgba(1.0, 1.0, 1.0, 1.0)
+                && tile.bg == rgba(0.0, 0.0, 0.0, 1.0)
+        }));
+    }
+
+    #[test]
+    fn cls_bg_resets_all_tiles_with_given_background() {
+        let mut console = VirtualConsole::new(Point::new(3, 2));
+        let bg = rgba(0.1, 0.2, 0.3, 0.4);
+
+        console.cls_bg(bg);
+
+        assert!(console.tiles.iter().all(|tile| {
+            tile.glyph == 32 && tile.fg == rgba(1.0, 1.0, 1.0, 1.0) && tile.bg == bg
+        }));
+    }
+
+    #[test]
+    fn print_writes_glyphs_but_keeps_existing_colors() {
+        let mut console = VirtualConsole::new(Point::new(5, 2));
+        let idx = console.at(1, 0);
+        let original_fg = console.tiles[idx].fg;
+        let original_bg = console.tiles[idx].bg;
+
+        console.print(1, 0, "ABC");
+
+        assert_eq!(console.tiles[console.at(1, 0)].glyph, 65);
+        assert_eq!(console.tiles[console.at(2, 0)].glyph, 66);
+        assert_eq!(console.tiles[console.at(3, 0)].glyph, 67);
+        assert_eq!(console.tiles[idx].fg, original_fg);
+        assert_eq!(console.tiles[idx].bg, original_bg);
+    }
+
+    #[test]
+    fn print_clips_out_of_bounds_characters() {
+        let mut console = VirtualConsole::new(Point::new(3, 1));
+
+        console.print(1, 0, "ABCD");
+
+        assert_eq!(console.tiles[console.at(0, 0)].glyph, 0);
+        assert_eq!(console.tiles[console.at(1, 0)].glyph, 65);
+        assert_eq!(console.tiles[console.at(2, 0)].glyph, 66);
+    }
+
+    #[test]
+    fn print_color_writes_glyphs_and_colors() {
+        let mut console = VirtualConsole::new(Point::new(5, 2));
+        let fg = rgba(0.1, 0.2, 0.3, 0.4);
+        let bg = rgba(0.5, 0.6, 0.7, 0.8);
+
+        console.print_color(1, 0, fg, bg, "XY");
+
+        let x = console.tiles[console.at(1, 0)];
+        let y = console.tiles[console.at(2, 0)];
+
+        assert_eq!(x.glyph, 88);
+        assert_eq!(x.fg, fg);
+        assert_eq!(x.bg, bg);
+
+        assert_eq!(y.glyph, 89);
+        assert_eq!(y.fg, fg);
+        assert_eq!(y.bg, bg);
+    }
+
+    #[test]
+    fn set_writes_single_tile() {
+        let mut console = VirtualConsole::new(Point::new(3, 2));
+        let fg = rgba(0.1, 0.2, 0.3, 0.4);
+        let bg = rgba(0.5, 0.6, 0.7, 0.8);
+
+        console.set(2, 1, fg, bg, 123);
+
+        let tile = console.tiles[console.at(2, 1)];
+        assert_eq!(tile.glyph, 123);
+        assert_eq!(tile.fg, fg);
+        assert_eq!(tile.bg, bg);
+    }
+
+    #[test]
+    fn set_ignores_out_of_bounds_coordinates() {
+        let mut console = VirtualConsole::new(Point::new(3, 1));
+
+        console.set(3, 0, rgba(0.1, 0.2, 0.3, 0.4), rgba(0.5, 0.6, 0.7, 0.8), 65);
+        console.set(
+            -1,
+            0,
+            rgba(0.1, 0.2, 0.3, 0.4),
+            rgba(0.5, 0.6, 0.7, 0.8),
+            66,
+        );
+        console.set(0, 1, rgba(0.1, 0.2, 0.3, 0.4), rgba(0.5, 0.6, 0.7, 0.8), 67);
+
+        assert!(console.tiles.iter().all(|tile| tile.glyph == 0));
+    }
+
+    #[test]
+    fn set_bg_changes_only_background() {
+        let mut console = VirtualConsole::new(Point::new(3, 2));
+        let idx = console.at(1, 1);
+        let original_glyph = console.tiles[idx].glyph;
+        let original_fg = console.tiles[idx].fg;
+        let bg = rgba(0.9, 0.8, 0.7, 0.6);
+
+        console.set_bg(1, 1, bg);
+
+        assert_eq!(console.tiles[idx].glyph, original_glyph);
+        assert_eq!(console.tiles[idx].fg, original_fg);
+        assert_eq!(console.tiles[idx].bg, bg);
+    }
+
+    #[test]
+    fn fill_region_updates_each_tile_in_region() {
+        let mut console = VirtualConsole::new(Point::new(5, 5));
+        let fg = rgba(0.1, 0.1, 0.1, 1.0);
+        let bg = rgba(0.2, 0.2, 0.2, 1.0);
+
+        console.fill_region(Rect::with_size(1, 1, 2, 3), 88, fg, bg);
+
+        for y in 1..4 {
+            for x in 1..3 {
+                let tile = console.tiles[console.at(x, y)];
+                assert_eq!(tile.glyph, 88);
+                assert_eq!(tile.fg, fg);
+                assert_eq!(tile.bg, bg);
+            }
+        }
+
+        assert_eq!(console.tiles[console.at(0, 0)].glyph, 0);
+    }
+
+    #[test]
+    fn print_centered_uses_console_width() {
+        let mut console = VirtualConsole::new(Point::new(10, 2));
+
+        console.print_centered(0, "ABCD");
+
+        assert_eq!(console.tiles[console.at(3, 0)].glyph, 65);
+        assert_eq!(console.tiles[console.at(4, 0)].glyph, 66);
+        assert_eq!(console.tiles[console.at(5, 0)].glyph, 67);
+        assert_eq!(console.tiles[console.at(6, 0)].glyph, 68);
+    }
+
+    #[test]
+    fn print_right_ends_before_given_x() {
+        let mut console = VirtualConsole::new(Point::new(10, 2));
+
+        console.print_right(8, 0, "ABC");
+
+        assert_eq!(console.tiles[console.at(5, 0)].glyph, 65);
+        assert_eq!(console.tiles[console.at(6, 0)].glyph, 66);
+        assert_eq!(console.tiles[console.at(7, 0)].glyph, 67);
+        assert_eq!(console.tiles[console.at(8, 0)].glyph, 0);
+    }
+
+    #[test]
+    fn clipping_round_trip() {
+        let mut console = VirtualConsole::new(Point::new(10, 20));
+        let clipping = Rect::with_size(1, 2, 3, 4);
+
+        assert_eq!(console.get_clipping(), None);
+
+        console.set_clipping(Some(clipping));
+        assert_eq!(console.get_clipping(), Some(clipping));
+    }
+
+    #[test]
+    fn clipping_limits_set_and_print() {
+        let mut console = VirtualConsole::new(Point::new(10, 5));
+
+        console.set_clipping(Some(Rect::with_size(2, 1, 3, 2)));
+        console.print(0, 1, "ABCDE");
+        console.set(4, 2, rgba(0.1, 0.2, 0.3, 0.4), rgba(0.5, 0.6, 0.7, 0.8), 90);
+        console.set(5, 2, rgba(0.1, 0.2, 0.3, 0.4), rgba(0.5, 0.6, 0.7, 0.8), 91);
+
+        assert_eq!(console.tiles[console.at(0, 1)].glyph, 0);
+        assert_eq!(console.tiles[console.at(1, 1)].glyph, 0);
+        assert_eq!(console.tiles[console.at(2, 1)].glyph, 67);
+        assert_eq!(console.tiles[console.at(3, 1)].glyph, 68);
+        assert_eq!(console.tiles[console.at(4, 1)].glyph, 69);
+        assert_eq!(console.tiles[console.at(4, 2)].glyph, 90);
+        assert_eq!(console.tiles[console.at(5, 2)].glyph, 0);
+    }
+
+    #[test]
+    fn alpha_methods_update_all_tiles() {
+        let mut console = VirtualConsole::new(Point::new(3, 2));
+
+        console.set_all_fg_alpha(0.25);
+        assert!(console.tiles.iter().all(|tile| tile.fg.a == 0.25));
+
+        console.set_all_bg_alpha(0.5);
+        assert!(console.tiles.iter().all(|tile| tile.bg.a == 0.5));
+
+        console.set_all_alpha(0.75, 1.0);
+        assert!(
+            console
+                .tiles
+                .iter()
+                .all(|tile| tile.fg.a == 0.75 && tile.bg.a == 1.0)
+        );
+    }
+
+    #[test]
+    fn set_translation_mode_changes_unicode_print_behavior() {
+        let mut console = VirtualConsole::new(Point::new(3, 1));
+
+        console.set_translation_mode(CharacterTranslationMode::Unicode);
+        console.print(0, 0, "가");
+
+        assert_eq!(console.tiles[console.at(0, 0)].glyph, '가' as FontCharType);
+    }
+
+    #[test]
+    fn from_text_wraps_lines_and_prints_content() {
+        let console = VirtualConsole::from_text("abcdef\ngh", 3);
+
+        assert_eq!(console.width, 3);
+        assert_eq!(console.height, 3);
+        assert_eq!(console.tiles[console.at(0, 0)].glyph, 97);
+        assert_eq!(console.tiles[console.at(1, 0)].glyph, 98);
+        assert_eq!(console.tiles[console.at(2, 0)].glyph, 99);
+        assert_eq!(console.tiles[console.at(0, 1)].glyph, 100);
+        assert_eq!(console.tiles[console.at(1, 1)].glyph, 101);
+        assert_eq!(console.tiles[console.at(2, 1)].glyph, 102);
+        assert_eq!(console.tiles[console.at(0, 2)].glyph, 103);
+        assert_eq!(console.tiles[console.at(1, 2)].glyph, 104);
+    }
+
+    #[test]
+    fn resize_pixels_is_ignored() {
+        let mut console = VirtualConsole::new(Point::new(10, 20));
+
+        console.resize_pixels(100, 200);
+
+        assert_eq!(console.get_char_size(), (10, 20));
+        assert_eq!(console.tiles.len(), 200);
+    }
+
+    #[test]
+    fn get_scale_returns_fixed_default() {
+        let console = VirtualConsole::new(Point::new(10, 20));
+        assert_eq!(console.get_scale(), (1.0, 0, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "Unsupported on virtual consoles.")]
+    fn set_offset_panics() {
+        let mut console = VirtualConsole::new(Point::new(10, 20));
+        console.set_offset(1.0, 2.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unsupported on virtual consoles.")]
+    fn set_scale_panics() {
+        let mut console = VirtualConsole::new(Point::new(10, 20));
+        console.set_scale(2.0, 3, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "Not implemented.")]
+    fn set_char_size_panics() {
+        let mut console = VirtualConsole::new(Point::new(10, 20));
+        console.set_char_size(30, 40);
+    }
+
+    #[test]
+    fn clear_dirty_is_no_op() {
+        let mut console = VirtualConsole::new(Point::new(10, 20));
+
+        console.clear_dirty();
+        assert_eq!(console.get_char_size(), (10, 20));
+    }
+
+    #[test]
+    fn as_any_allows_downcasting_to_virtual_console() {
+        let console = VirtualConsole::new(Point::new(10, 20));
+        assert!(console.as_any().downcast_ref::<VirtualConsole>().is_some());
+    }
+
+    #[test]
+    fn as_any_mut_allows_mutable_downcasting_to_virtual_console() {
+        let mut console = VirtualConsole::new(Point::new(10, 20));
+
+        assert!(
+            console
+                .as_any_mut()
+                .downcast_mut::<VirtualConsole>()
+                .is_some()
+        );
+    }
 }

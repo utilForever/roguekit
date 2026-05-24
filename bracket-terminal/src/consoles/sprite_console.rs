@@ -278,3 +278,252 @@ impl Console for SpriteConsole {
         self.is_dirty = false;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    fn rgba(r: u8, g: u8, b: u8, a: u8) -> RGBA {
+        RGBA::from_u8(r, g, b, a)
+    }
+
+    fn test_sprite(index: usize) -> RenderSprite {
+        RenderSprite {
+            destination: Rect::with_size(1, 2, 3, 4),
+            z_order: 5,
+            tint: rgba(10, 20, 30, 40),
+            index,
+        }
+    }
+
+    #[test]
+    fn init_creates_empty_sprite_console() {
+        let console = SpriteConsole::init(80, 50, 7);
+
+        assert_eq!(console.get_char_size(), (80, 50));
+        assert_eq!(console.sprite_sheet, 7);
+        assert!(console.sprites.is_empty());
+        assert!(console.is_dirty);
+        assert!(!console.needs_resize_internal);
+    }
+
+    #[rstest]
+    #[case(0, 0, 30)]
+    #[case(1, 0, 31)]
+    #[case(9, 0, 39)]
+    #[case(0, 1, 20)]
+    #[case(0, 2, 10)]
+    #[case(0, 3, 0)]
+    #[case(9, 3, 9)]
+    fn at_uses_bottom_origin_storage(#[case] x: i32, #[case] y: i32, #[case] expected: usize) {
+        let console = SpriteConsole::init(10, 4, 0);
+        assert_eq!(console.at(x, y), expected);
+    }
+
+    #[test]
+    fn sprite_console_at_mapping_differs_from_test_console_row_major_mapping() {
+        let sprite_console = SpriteConsole::init(10, 4, 0);
+
+        assert_eq!(sprite_console.at(0, 0), 30);
+        assert_eq!(sprite_console.at(0, 3), 0);
+    }
+
+    #[test]
+    fn render_sprite_appends_sprite_and_marks_dirty() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.clear_dirty();
+        console.render_sprite(test_sprite(3));
+
+        assert!(console.is_dirty);
+        assert_eq!(console.sprites.len(), 1);
+        assert_eq!(console.sprites[0].destination, Rect::with_size(1, 2, 3, 4));
+        assert_eq!(console.sprites[0].z_order, 5);
+        assert_eq!(console.sprites[0].tint, rgba(10, 20, 30, 40));
+        assert_eq!(console.sprites[0].index, 3);
+    }
+
+    #[test]
+    fn cls_clears_sprites_and_marks_dirty() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.render_sprite(test_sprite(1));
+        console.render_sprite(test_sprite(2));
+        console.clear_dirty();
+        assert!(!console.is_dirty);
+
+        console.cls();
+        assert!(console.is_dirty);
+        assert!(console.sprites.is_empty());
+    }
+
+    #[test]
+    fn cls_bg_clears_sprites_and_ignores_background() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.render_sprite(test_sprite(1));
+        console.clear_dirty();
+        assert!(!console.is_dirty);
+
+        console.cls_bg(rgba(1, 2, 3, 4));
+        assert!(console.is_dirty);
+        assert!(console.sprites.is_empty());
+    }
+
+    #[test]
+    fn text_and_tile_methods_do_nothing() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.print(1, 2, "hello");
+        console.print_color(1, 2, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), "hello");
+        console.set(1, 2, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), 65);
+        console.set_bg(1, 2, rgba(1, 2, 3, 4));
+        console.fill_region(
+            Rect::with_size(0, 0, 2, 2),
+            65,
+            rgba(1, 2, 3, 4),
+            rgba(5, 6, 7, 8),
+        );
+        console.print_centered(1, "hello");
+        console.print_color_centered(1, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), "hello");
+        console.print_centered_at(1, 2, "hello");
+        console.print_color_centered_at(1, 2, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), "hello");
+        console.print_right(10, 2, "hello");
+        console.print_color_right(10, 2, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8), "hello");
+        console.printer(1, 2, "#[red]hello", TextAlign::Left, None);
+
+        assert!(console.sprites.is_empty());
+    }
+
+    #[test]
+    fn draw_methods_do_nothing() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.draw_box(1, 2, 3, 4, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8));
+        console.draw_box_double(1, 2, 3, 4, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8));
+        console.draw_hollow_box(1, 2, 3, 4, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8));
+        console.draw_hollow_box_double(1, 2, 3, 4, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8));
+        console.draw_bar_horizontal(1, 2, 3, 1, 10, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8));
+        console.draw_bar_vertical(1, 2, 3, 1, 10, rgba(1, 2, 3, 4), rgba(5, 6, 7, 8));
+
+        assert!(console.sprites.is_empty());
+    }
+
+    #[test]
+    fn to_xp_layer_returns_layer_with_console_dimensions() {
+        let console = SpriteConsole::init(80, 50, 7);
+        let layer = console.to_xp_layer();
+
+        assert_eq!(layer.width, 80);
+        assert_eq!(layer.height, 50);
+    }
+
+    #[test]
+    fn scale_methods_are_no_ops_with_fixed_default_result() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.set_offset(1.0, 2.0);
+        console.set_scale(3.0, 4, 5);
+
+        assert_eq!(console.get_scale(), (1.0, 0, 0));
+    }
+
+    #[test]
+    fn clipping_methods_are_no_ops() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.set_clipping(Some(Rect::with_size(1, 2, 3, 4)));
+        assert_eq!(console.get_clipping(), None);
+    }
+
+    #[test]
+    fn set_all_fg_alpha_updates_sprite_tint_alpha() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.render_sprite(test_sprite(1));
+        console.render_sprite(test_sprite(2));
+        console.set_all_fg_alpha(0.25);
+
+        assert!(console.sprites.iter().all(|sprite| sprite.tint.a == 0.25));
+    }
+
+    #[test]
+    fn set_all_bg_alpha_does_nothing() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.render_sprite(test_sprite(1));
+        let original_alpha = console.sprites[0].tint.a;
+
+        console.set_all_bg_alpha(0.25);
+        assert_eq!(console.sprites[0].tint.a, original_alpha);
+    }
+
+    #[test]
+    fn set_all_alpha_updates_sprite_tint_alpha_from_fg_only() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.render_sprite(test_sprite(1));
+        console.render_sprite(test_sprite(2));
+        console.set_all_alpha(0.75, 0.25);
+
+        assert!(console.sprites.iter().all(|sprite| sprite.tint.a == 0.75));
+    }
+
+    #[test]
+    fn set_translation_mode_does_nothing() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.set_translation_mode(CharacterTranslationMode::Unicode);
+        assert!(console.sprites.is_empty());
+    }
+
+    #[test]
+    fn set_char_size_updates_dimensions_without_changing_sprites() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.render_sprite(test_sprite(1));
+        console.set_char_size(100, 60);
+
+        assert_eq!(console.get_char_size(), (100, 60));
+        assert_eq!(console.sprites.len(), 1);
+        assert!(console.needs_resize_internal);
+    }
+
+    #[test]
+    fn resize_pixels_marks_dirty_without_changing_dimensions() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+
+        console.clear_dirty();
+        console.resize_pixels(1024, 768);
+
+        assert!(console.is_dirty);
+        assert_eq!(console.get_char_size(), (80, 50));
+    }
+
+    #[test]
+    fn clear_dirty_resets_dirty_flag() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+        assert!(console.is_dirty);
+
+        console.clear_dirty();
+        assert!(!console.is_dirty);
+    }
+
+    #[test]
+    fn as_any_allows_downcasting_to_sprite_console() {
+        let console = SpriteConsole::init(80, 50, 7);
+        assert!(console.as_any().downcast_ref::<SpriteConsole>().is_some());
+    }
+
+    #[test]
+    fn as_any_mut_allows_mutable_downcasting_to_sprite_console() {
+        let mut console = SpriteConsole::init(80, 50, 7);
+        assert!(
+            console
+                .as_any_mut()
+                .downcast_mut::<SpriteConsole>()
+                .is_some()
+        );
+    }
+}
