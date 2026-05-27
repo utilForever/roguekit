@@ -66,3 +66,18 @@ macro_rules! add_wasm_support {
         }
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::prelude::{XpCell, XpFile, XpLayer};
+
+    fn takes_xp_cell(_: XpCell) {}
+
+    #[test]
+    fn prelude_reexports_rexpaint_types() {
+        let file = XpFile::new(1, 1);
+        let _layer: XpLayer = XpLayer::new(1, 1);
+        let cell: XpCell = file.layers[0].cells[0];
+        takes_xp_cell(cell);
+    }
+}
