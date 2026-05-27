@@ -154,6 +154,10 @@ impl ScreenScaler {
         self.physical_size.0 = width;
         self.physical_size.1 = height;
 
+        // Initialize previous smooth gutter state
+        self.smooth_gutter_x = 0;
+        self.smooth_gutter_y = 0;
+
         let mut desired_y = (width as f32 * self.aspect_ratio) as u32;
         desired_y -= desired_y % max_font.1;
 
@@ -244,5 +248,189 @@ impl ScreenScaler {
             self.physical_size.1 - self.gutter_bottom,
         );
         (left, right, top, bottom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_f32_eq(actual: f32, expected: f32) {
+        let epsilon = 0.0001;
+
+        assert!(
+            (actual - expected).abs() < epsilon,
+            "actual: {}, expected: {}",
+            actual,
+            expected
+        );
+    }
+
+    #[test]
+    fn glyph_position_returns_coordinates_for_first_glyph() {
+        let scaler = FontScaler::new((16, 16), (1.0 / 16.0, 1.0 / 16.0));
+        let position = scaler.glyph_position(0);
+
+        // x
+        assert_f32_eq(position.glyph_left, 0.0);
+        assert_f32_eq(position.glyph_right, 1.0 / 16.0);
+
+        // y
+        assert_f32_eq(position.glyph_top, 1.0);
+        assert_f32_eq(position.glyph_bottom, 15.0 / 16.0);
+    }
+
+    #[test]
+    fn glyph_position_returns_coordinates_for_second_row() {
+        let scaler = FontScaler::new((16, 16), (1.0 / 16.0, 1.0 / 16.0));
+        let position = scaler.glyph_position(16);
+
+        assert_f32_eq(position.glyph_left, 0.0);
+        assert_f32_eq(position.glyph_right, 1.0 / 16.0);
+
+        assert_f32_eq(position.glyph_top, 15.0 / 16.0);
+        assert_f32_eq(position.glyph_bottom, 14.0 / 16.0);
+    }
+
+    #[test]
+    fn even_gutter_is_split_equally() {
+        let scaler = ScreenScaler::new(8, 800, 600);
+
+        assert_eq!(scaler.gutter_left, 4);
+        assert_eq!(scaler.gutter_right, 4);
+
+        assert_eq!(scaler.gutter_top, 4);
+        assert_eq!(scaler.gutter_bottom, 4);
+
+        assert_eq!(scaler.available_width, 792);
+        assert_eq!(scaler.available_height, 592);
+    }
+
+    #[test]
+    fn odd_gutter_distributes_extra_pixel_to_right_and_bottom() {
+        let scaler = ScreenScaler::new(9, 800, 600);
+
+        assert_eq!(scaler.gutter_left, 4);
+        assert_eq!(scaler.gutter_right, 5);
+
+        assert_eq!(scaler.gutter_top, 4);
+        assert_eq!(scaler.gutter_bottom, 5);
+
+        assert_eq!(scaler.available_width, 791);
+        assert_eq!(scaler.available_height, 591);
+    }
+
+    #[test]
+    fn new_window_size_adds_desired_gutter() {
+        let mut scaler = ScreenScaler::new(8, 800, 600);
+
+        let size = scaler.new_window_size();
+
+        assert_eq!(size.width, 808);
+        assert_eq!(size.height, 608);
+
+        assert_eq!(scaler.logical_size, (800, 600));
+    }
+
+    #[test]
+    fn change_logical_size_updates_physical_size_using_scale_factor() {
+        let mut scaler = ScreenScaler::new(8, 800, 600);
+
+        scaler.change_logical_size(400, 300, 2.0);
+
+        assert_eq!(scaler.physical_size, (800, 600));
+
+        assert_eq!(scaler.scale_factor, 2.0);
+
+        assert_eq!(scaler.gutter_left, 8);
+        assert_eq!(scaler.gutter_right, 8);
+    }
+
+    #[test]
+    fn change_physical_size_updates_dimensions_directly() {
+        let mut scaler = ScreenScaler::new(8, 800, 600);
+
+        scaler.change_physical_size(1920, 1080, 1.5);
+
+        assert_eq!(scaler.physical_size, (1920, 1080));
+        assert_eq!(scaler.scale_factor, 1.5);
+
+        assert!(scaler.available_width < 1920);
+        assert!(scaler.available_height < 1080);
+    }
+
+    #[test]
+    fn smooth_resize_adds_vertical_gutter_when_height_is_larger_than_aspect_ratio() {
+        let mut scaler = ScreenScaler::new(0, 800, 600);
+
+        scaler.change_physical_size_smooth(1600, 1400, 1.0, (8, 16));
+
+        assert!(scaler.smooth_gutter_y > 0);
+
+        assert_eq!(scaler.smooth_gutter_x, 0);
+
+        assert!(scaler.available_height < 1400);
+    }
+
+    #[test]
+    fn smooth_resize_recomputes_gutters_from_current_size_only() {
+        let mut scaler = ScreenScaler::new(0, 800, 600);
+
+        scaler.change_physical_size_smooth(1600, 900, 1.0, (8, 16));
+        assert!(scaler.smooth_gutter_x > 0 || scaler.smooth_gutter_y > 0);
+        assert!(
+            (scaler.smooth_gutter_x > 0 && scaler.smooth_gutter_y == 0)
+                || (scaler.smooth_gutter_x == 0 && scaler.smooth_gutter_y > 0)
+        );
+
+        scaler.change_physical_size_smooth(1600, 1400, 1.0, (8, 16));
+        assert!(
+            (scaler.smooth_gutter_x > 0 && scaler.smooth_gutter_y == 0)
+                || (scaler.smooth_gutter_x == 0 && scaler.smooth_gutter_y > 0)
+        );
+        assert_eq!(scaler.smooth_gutter_x, 0);
+
+        assert_eq!(
+            scaler.available_width,
+            scaler.physical_size.0 - (scaler.gutter_left + scaler.gutter_right)
+        );
+        assert_eq!(
+            scaler.available_height,
+            scaler.physical_size.1 - (scaler.gutter_top + scaler.gutter_bottom)
+        );
+    }
+
+    #[test]
+    fn resized_flag_resets_after_query() {
+        let mut scaler = ScreenScaler::new(8, 800, 600);
+
+        assert!(scaler.get_resized_and_reset());
+
+        assert!(!scaler.get_resized_and_reset());
+    }
+
+    #[test]
+    fn pixel_to_screen_maps_corners_correctly() {
+        let scaler = ScreenScaler::new(0, 800, 600);
+
+        let top_left = scaler.top_left_pixel();
+        let bottom_right = scaler.bottom_right_pixel();
+
+        assert_f32_eq(top_left.0, -1.0);
+        assert_f32_eq(top_left.1, -1.0);
+
+        assert_f32_eq(bottom_right.0, 1.0);
+        assert_f32_eq(bottom_right.1, 1.0);
+    }
+
+    #[test]
+    fn calc_step_returns_expected_step_size() {
+        let scaler = ScreenScaler::new(0, 800, 600);
+
+        let (step_x, step_y) = scaler.calc_step(80, 60, 1.0);
+
+        assert_f32_eq(step_x, 2.0 / 80.0);
+
+        assert_f32_eq(step_y, 2.0 / 60.0);
     }
 }
