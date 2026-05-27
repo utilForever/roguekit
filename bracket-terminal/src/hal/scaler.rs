@@ -154,6 +154,10 @@ impl ScreenScaler {
         self.physical_size.0 = width;
         self.physical_size.1 = height;
 
+        // Initialize previous smooth gutter state
+        self.smooth_gutter_x = 0;
+        self.smooth_gutter_y = 0;
+
         let mut desired_y = (width as f32 * self.aspect_ratio) as u32;
         desired_y -= desired_y % max_font.1;
 
@@ -369,14 +373,31 @@ mod tests {
     }
 
     #[test]
-    fn smooth_resize_resets_previous_gutter_values() {
+    fn smooth_resize_recomputes_gutters_from_current_size_only() {
         let mut scaler = ScreenScaler::new(0, 800, 600);
 
         scaler.change_physical_size_smooth(1600, 900, 1.0, (8, 16));
+        assert!(scaler.smooth_gutter_x > 0 || scaler.smooth_gutter_y > 0);
+        assert!(
+            (scaler.smooth_gutter_x > 0 && scaler.smooth_gutter_y == 0)
+                || (scaler.smooth_gutter_x == 0 && scaler.smooth_gutter_y > 0)
+        );
 
         scaler.change_physical_size_smooth(1600, 1400, 1.0, (8, 16));
-
+        assert!(
+            (scaler.smooth_gutter_x > 0 && scaler.smooth_gutter_y == 0)
+                || (scaler.smooth_gutter_x == 0 && scaler.smooth_gutter_y > 0)
+        );
         assert_eq!(scaler.smooth_gutter_x, 0);
+
+        assert_eq!(
+            scaler.available_width,
+            scaler.physical_size.0 - (scaler.gutter_left + scaler.gutter_right)
+        );
+        assert_eq!(
+            scaler.available_height,
+            scaler.physical_size.1 - (scaler.gutter_top + scaler.gutter_bottom)
+        );
     }
 
     #[test]
