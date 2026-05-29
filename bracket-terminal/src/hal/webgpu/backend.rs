@@ -5,7 +5,7 @@ use lazy_static::*;
 use parking_lot::Mutex;
 
 lazy_static! {
-    pub static ref BACKEND: Mutex<PlatformGL> = Mutex::new(PlatformGL {
+    pub static ref BACKEND: Mutex<PlatformGL<'static>> = Mutex::new(PlatformGL {
         context_wrapper: None,
         wgpu: None,
         resize_scaling: false,

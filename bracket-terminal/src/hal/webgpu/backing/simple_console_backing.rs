@@ -48,28 +48,29 @@ impl SimpleConsoleBackend {
             wgpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: None,
-                    bind_group_layouts: &[font.bind_group_layout.as_ref().unwrap()],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(font.bind_group_layout.as_ref().unwrap())],
+                    immediate_size: 0,
                 });
         let render_pipeline = wgpu
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
-                multiview: None,
                 layout: Some(&render_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader.0,
-                    entry_point: "vs_main",
+                    entry_point: Some("vs_main"),
                     buffers: &[vao.descriptor()],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader.0,
-                    entry_point: "fs_main",
+                    entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: wgpu.config.format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -87,6 +88,8 @@ impl SimpleConsoleBackend {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
+                multiview_mask: None,
+                cache: None,
             });
 
         // Build the result
@@ -150,7 +153,7 @@ impl SimpleConsoleBackend {
         offset_x: f32,
         offset_y: f32,
         scale: f32,
-        scale_center: (i32, i32),
+        _scale_center: (i32, i32),
         needs_resize: bool,
         font_scaler: FontScaler,
         screen_scaler: &ScreenScaler,
@@ -277,6 +280,7 @@ impl SimpleConsoleBackend {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: wgpu.backing_buffer.view(),
                         resolve_target: None,
+                        depth_slice: None,
                         ops: wgpu::Operations {
                             /*load: wgpu::LoadOp::Clear(wgpu::Color {
                                 r: 0.0,
@@ -285,10 +289,13 @@ impl SimpleConsoleBackend {
                                 a: 1.0,
                             }),*/
                             load: wgpu::LoadOp::Load,
-                            store: true,
+                            store: wgpu::StoreOp::Store,
                         },
                     })],
                     depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                    multiview_mask: None,
                 });
                 render_pass.set_pipeline(&self.render_pipeline);
                 render_pass.set_bind_group(0, font.bind_group.as_ref().unwrap(), &[]);

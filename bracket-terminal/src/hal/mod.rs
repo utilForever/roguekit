@@ -56,9 +56,15 @@ pub use dummy::*;
 #[cfg(any(feature = "opengl", feature = "webgpu"))]
 mod scaler;
 
+#[cfg(all(not(feature = "opengl"), feature = "webgpu"))]
+type ActivePlatformGL = PlatformGL<'static>;
+
+#[cfg(not(all(not(feature = "opengl"), feature = "webgpu")))]
+type ActivePlatformGL = PlatformGL;
+
 /// Provides a base abstract platform for BTerm to run on, with specialized content.
 pub struct BTermPlatform {
-    pub platform: PlatformGL,
+    pub platform: ActivePlatformGL,
 }
 
 #[allow(dead_code)]

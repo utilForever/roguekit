@@ -17,7 +17,12 @@ use bracket_geometry::prelude::Point;
 use std::mem::size_of;
 use std::{rc::Rc, time::Instant};
 use wgpu::TextureViewDescriptor;
-use winit::{dpi::PhysicalSize, event::*, event_loop::ControlFlow};
+use winit::{
+    dpi::PhysicalSize,
+    event::*,
+    event_loop::ControlFlow,
+    keyboard::{KeyCode, PhysicalKey},
+};
 
 const TICK_TYPE: ControlFlow = ControlFlow::Poll;
 
@@ -25,6 +30,118 @@ struct ResizeEvent {
     physical_size: PhysicalSize<u32>,
     dpi_scale_factor: f64,
     send_event: bool,
+}
+
+// Translate winit 0.30 key codes into the existing engine's VirtualKeyCode values.
+fn map_keycode(code: KeyCode) -> Option<crate::hal::VirtualKeyCode> {
+    use crate::hal::VirtualKeyCode as V;
+    use KeyCode as W;
+
+    Some(match code {
+        W::Digit0 => V::Key0,
+        W::Digit1 => V::Key1,
+        W::Digit2 => V::Key2,
+        W::Digit3 => V::Key3,
+        W::Digit4 => V::Key4,
+        W::Digit5 => V::Key5,
+        W::Digit6 => V::Key6,
+        W::Digit7 => V::Key7,
+        W::Digit8 => V::Key8,
+        W::Digit9 => V::Key9,
+        W::KeyA => V::A,
+        W::KeyB => V::B,
+        W::KeyC => V::C,
+        W::KeyD => V::D,
+        W::KeyE => V::E,
+        W::KeyF => V::F,
+        W::KeyG => V::G,
+        W::KeyH => V::H,
+        W::KeyI => V::I,
+        W::KeyJ => V::J,
+        W::KeyK => V::K,
+        W::KeyL => V::L,
+        W::KeyM => V::M,
+        W::KeyN => V::N,
+        W::KeyO => V::O,
+        W::KeyP => V::P,
+        W::KeyQ => V::Q,
+        W::KeyR => V::R,
+        W::KeyS => V::S,
+        W::KeyT => V::T,
+        W::KeyU => V::U,
+        W::KeyV => V::V,
+        W::KeyW => V::W,
+        W::KeyX => V::X,
+        W::KeyY => V::Y,
+        W::KeyZ => V::Z,
+        W::Escape => V::Escape,
+        W::F1 => V::F1,
+        W::F2 => V::F2,
+        W::F3 => V::F3,
+        W::F4 => V::F4,
+        W::F5 => V::F5,
+        W::F6 => V::F6,
+        W::F7 => V::F7,
+        W::F8 => V::F8,
+        W::F9 => V::F9,
+        W::F10 => V::F10,
+        W::F11 => V::F11,
+        W::F12 => V::F12,
+        W::PrintScreen => V::Snapshot,
+        W::ScrollLock => V::Scroll,
+        W::Pause => V::Pause,
+        W::Insert => V::Insert,
+        W::Home => V::Home,
+        W::Delete => V::Delete,
+        W::End => V::End,
+        W::PageDown => V::PageDown,
+        W::PageUp => V::PageUp,
+        W::NumLock => V::Numlock,
+        W::Numpad0 => V::Numpad0,
+        W::Numpad1 => V::Numpad1,
+        W::Numpad2 => V::Numpad2,
+        W::Numpad3 => V::Numpad3,
+        W::Numpad4 => V::Numpad4,
+        W::Numpad5 => V::Numpad5,
+        W::Numpad6 => V::Numpad6,
+        W::Numpad7 => V::Numpad7,
+        W::Numpad8 => V::Numpad8,
+        W::Numpad9 => V::Numpad9,
+        W::NumpadDecimal => V::Decimal,
+        W::NumpadDivide => V::Divide,
+        W::NumpadMultiply => V::Multiply,
+        W::NumpadSubtract => V::Subtract,
+        W::NumpadAdd => V::Add,
+        W::NumpadEnter => V::NumpadEnter,
+        W::NumpadEqual => V::NumpadEquals,
+        W::NumpadComma => V::NumpadComma,
+        W::ArrowLeft => V::Left,
+        W::ArrowUp => V::Up,
+        W::ArrowRight => V::Right,
+        W::ArrowDown => V::Down,
+        W::Backspace => V::Back,
+        W::Enter => V::Return,
+        W::Space => V::Space,
+        W::Tab => V::Tab,
+        W::ShiftLeft => V::LShift,
+        W::ShiftRight => V::RShift,
+        W::ControlLeft => V::LControl,
+        W::ControlRight => V::RControl,
+        W::AltLeft => V::LAlt,
+        W::AltRight => V::RAlt,
+        W::BracketLeft => V::LBracket,
+        W::BracketRight => V::RBracket,
+        W::Minus => V::Minus,
+        W::Equal => V::Equals,
+        W::Comma => V::Comma,
+        W::Period => V::Period,
+        W::Semicolon => V::Semicolon,
+        W::Slash => V::Slash,
+        W::Backslash => V::Backslash,
+        W::Quote => V::Apostrophe,
+        W::Backquote => V::Grave,
+        _ => return None,
+    })
 }
 
 pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<()> {
@@ -71,16 +188,18 @@ pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<
     let spin_sleeper = spin_sleep::SpinSleeper::default();
     let my_window_id = window.id();
 
-    el.run(move |event, _, control_flow| {
+    #[allow(deprecated)]
+    el.run(move |event, target| {
         let wait_time = BACKEND.lock().frame_sleep_time.unwrap_or(33); // Hoisted to reduce locks
-        *control_flow = TICK_TYPE;
+        target.set_control_flow(TICK_TYPE);
 
         if bterm.quitting {
-            *control_flow = ControlFlow::Exit;
+            target.exit();
+            return;
         }
 
-        match &event {
-            Event::RedrawEventsCleared => {
+        match event {
+            Event::AboutToWait => {
                 let frame_timer = Instant::now();
                 if window.inner_size().width == 0 || window.inner_size().height == 0 {
                     return;
@@ -111,27 +230,23 @@ pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<
                         &now,
                         &mut backing_flip,
                     );
-                    //wc.swap_buffers().unwrap();
-                    // Moved from new events, which doesn't make sense
                     clear_input_state(&mut bterm);
                 }
 
                 // Wait for an appropriate amount of time
                 let time_since_last_frame = frame_timer.elapsed().as_millis() as u64;
                 if time_since_last_frame < wait_time {
+                    #[cfg(feature = "low_cpu")]
                     let delay = u64::min(33, wait_time - time_since_last_frame);
                     #[cfg(feature = "low_cpu")]
                     spin_sleeper.sleep(std::time::Duration::from_millis(delay));
                 }
             }
             Event::WindowEvent { event, window_id } => {
-                // Fast return for other windows
-                if *window_id != my_window_id {
-                    //println!("Dropped event from other window");
+                if window_id != my_window_id {
                     return;
                 }
 
-                // Handle Window Events
                 match event {
                     WindowEvent::Moved(physical_position) => {
                         bterm.on_event(BEvent::Moved {
@@ -140,8 +255,6 @@ pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<
 
                         let scale_factor = window.scale_factor();
                         let physical_size = window.inner_size();
-                        //wc.resize(physical_size);
-                        //on_resize(&mut bterm, physical_size, scale_factor, true).unwrap();
                         queued_resize_event = Some(ResizeEvent {
                             physical_size,
                             dpi_scale_factor: scale_factor,
@@ -151,8 +264,6 @@ pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<
                     WindowEvent::Resized(_physical_size) => {
                         let scale_factor = window.scale_factor();
                         let physical_size = window.inner_size();
-                        //wc.resize(physical_size);
-                        //on_resize(&mut bterm, physical_size, scale_factor, true).unwrap();
                         queued_resize_event = Some(ResizeEvent {
                             physical_size,
                             dpi_scale_factor: scale_factor,
@@ -160,18 +271,14 @@ pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<
                         });
                     }
                     WindowEvent::CloseRequested => {
-                        // If not using events, just close. Otherwise, push the event
                         if !INPUT.lock().use_events {
-                            *control_flow = ControlFlow::Exit;
+                            target.exit();
                         } else {
                             bterm.on_event(BEvent::CloseRequested);
                         }
                     }
-                    WindowEvent::ReceivedCharacter(char) => {
-                        bterm.on_event(BEvent::Character { c: *char });
-                    }
                     WindowEvent::Focused(focused) => {
-                        bterm.on_event(BEvent::Focused { focused: *focused });
+                        bterm.on_event(BEvent::Focused { focused });
                     }
                     WindowEvent::CursorMoved { position: pos, .. } => {
                         bterm.on_mouse_position(pos.x, pos.y);
@@ -180,19 +287,20 @@ pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<
                     WindowEvent::CursorLeft { .. } => bterm.on_event(BEvent::CursorLeft),
 
                     WindowEvent::MouseInput { button, state, .. } => {
-                        let button = match button {
+                        let button = match &button {
                             MouseButton::Left => 0,
                             MouseButton::Right => 1,
                             MouseButton::Middle => 2,
-                            MouseButton::Other(num) => 3 + *num as usize,
+                            MouseButton::Back => 3,
+                            MouseButton::Forward => 4,
+                            MouseButton::Other(num) => 5 + *num as usize,
                         };
-                        bterm.on_mouse_button(button, *state == ElementState::Pressed);
+                        bterm.on_mouse_button(button, state == ElementState::Pressed);
                     }
 
-                    WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                    WindowEvent::ScaleFactorChanged { .. } => {
                         let scale_factor = window.scale_factor();
                         let physical_size = window.inner_size();
-                        //wc.resize(physical_size);
                         on_resize(
                             &mut bterm,
                             physical_size,
@@ -202,33 +310,39 @@ pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<
                         )
                         .unwrap();
                         bterm.on_event(BEvent::ScaleFactorChanged {
-                            new_size: Point::new(new_inner_size.width, new_inner_size.height),
+                            new_size: Point::new(physical_size.width, physical_size.height),
                             dpi_scale_factor: scale_factor as f32,
                         })
                     }
 
-                    WindowEvent::KeyboardInput {
-                        input:
-                            KeyboardInput {
-                                virtual_keycode: Some(virtual_keycode),
-                                state,
-                                scancode,
-                                ..
-                            },
-                        ..
-                    } => bterm.on_key(*virtual_keycode, *scancode, *state == ElementState::Pressed),
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        if let Some(text) = event.text {
+                            for c in text.chars() {
+                                bterm.on_event(BEvent::Character { c });
+                            }
+                        }
+
+                        if let PhysicalKey::Code(code) = event.physical_key {
+                            if let Some(key) = map_keycode(code) {
+                                bterm.on_key(key, key as u32, event.state == ElementState::Pressed);
+                            }
+                        }
+                    }
 
                     WindowEvent::ModifiersChanged(modifiers) => {
-                        bterm.shift = modifiers.shift();
-                        bterm.alt = modifiers.alt();
-                        bterm.control = modifiers.ctrl();
+                        let state = modifiers.state();
+                        bterm.shift = state.shift_key();
+                        bterm.alt = state.alt_key();
+                        bterm.control = state.control_key();
                     }
                     _ => {}
                 }
             }
             _ => {}
         }
-    });
+    })?;
+
+    Ok(())
 }
 
 fn largest_active_font() -> (u32, u32) {
@@ -274,7 +388,7 @@ fn on_resize(
     }
 
     // WGPU resizing
-    if let Some(mut wgpu) = be.wgpu.as_mut() {
+    if let Some(wgpu) = be.wgpu.as_mut() {
         backing_flip.update_buffer_with_gutter(wgpu, l, r, t, b);
         wgpu.config.width = physical_size.width;
         wgpu.config.height = physical_size.height;
@@ -296,13 +410,8 @@ fn on_resize(
         // Backing buffer resizing
         let w = be.screen_scaler.available_width;
         let h = be.screen_scaler.available_height;
-        let mut wgpu = be.wgpu.as_mut().unwrap();
-        wgpu.backing_buffer = Framebuffer::new(
-            &wgpu.device,
-            wgpu.surface.get_supported_formats(&wgpu.adapter)[0],
-            w,
-            h,
-        );
+        let wgpu = be.wgpu.as_mut().unwrap();
+        wgpu.backing_buffer = Framebuffer::new(&wgpu.device, wgpu.config.format, w, h);
 
         let num_consoles = bit.consoles.len();
         for i in 0..num_consoles {
@@ -367,23 +476,32 @@ fn tock<GS: GameState>(
     {
         let mut be = BACKEND.lock();
         if let Some(wgpu) = be.wgpu.as_ref() {
-            if let Ok(current_tex) = wgpu.surface.get_current_texture() {
-                backing_flip.update_uniform(
-                    wgpu,
-                    bterm.post_scanlines,
-                    bterm.post_screenburn,
-                    bterm.screen_burn_color,
-                );
-                let target = current_tex
-                    .texture
-                    .create_view(&TextureViewDescriptor::default());
-                if backing_flip.render(&wgpu, &target).is_ok() {
-                    if let Some(filename) = &be.request_screenshot {
-                        take_screenshot(filename, &wgpu, bterm, &wgpu.backing_buffer.texture);
+            match wgpu.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(current_tex)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(current_tex) => {
+                    backing_flip.update_uniform(
+                        wgpu,
+                        bterm.post_scanlines,
+                        bterm.post_screenburn,
+                        bterm.screen_burn_color,
+                    );
+                    let target = current_tex
+                        .texture
+                        .create_view(&TextureViewDescriptor::default());
+                    if backing_flip.render(&wgpu, &target).is_ok() {
+                        if let Some(filename) = &be.request_screenshot {
+                            take_screenshot(filename, &wgpu, bterm, &wgpu.backing_buffer.texture);
+                        }
+                        be.request_screenshot = None;
+                        current_tex.present();
                     }
-                    be.request_screenshot = None;
-                    current_tex.present();
                 }
+                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                    wgpu.surface.configure(&wgpu.device, &wgpu.config);
+                }
+                wgpu::CurrentSurfaceTexture::Timeout
+                | wgpu::CurrentSurfaceTexture::Occluded
+                | wgpu::CurrentSurfaceTexture::Validation => {}
             }
         }
     }
@@ -401,7 +519,7 @@ pub(crate) fn rebuild_consoles() {
         let cons = &mut bi.consoles[i];
         match c {
             ConsoleBacking::Simple { backing } => {
-                let mut sc = cons
+                let sc = cons
                     .console
                     .as_any_mut()
                     .downcast_mut::<SimpleConsole>()
@@ -426,7 +544,7 @@ pub(crate) fn rebuild_consoles() {
                 }
             }
             ConsoleBacking::Sparse { backing } => {
-                let mut sc = bi.consoles[i]
+                let sc = bi.consoles[i]
                     .console
                     .as_any_mut()
                     .downcast_mut::<SparseConsole>()
@@ -451,7 +569,7 @@ pub(crate) fn rebuild_consoles() {
                 }
             }
             ConsoleBacking::Fancy { backing } => {
-                let mut fc = bi.consoles[i]
+                let fc = bi.consoles[i]
                     .console
                     .as_any_mut()
                     .downcast_mut::<FlexiConsole>()
@@ -477,7 +595,7 @@ pub(crate) fn rebuild_consoles() {
             }
             ConsoleBacking::Sprite { backing } => {
                 let ss = bi.sprite_sheets.clone();
-                let mut sc = bi.consoles[i]
+                let sc = bi.consoles[i]
                     .console
                     .as_any_mut()
                     .downcast_mut::<SpriteConsole>()
@@ -577,7 +695,7 @@ pub(crate) fn check_console_backing() {
     }
 }
 
-fn clear_screen_pass() -> Result<(), wgpu::SurfaceError> {
+fn clear_screen_pass() -> BResult<()> {
     let mut be = BACKEND.lock();
     if let Some(wgpu) = be.wgpu.as_mut() {
         let mut encoder = wgpu
@@ -590,6 +708,7 @@ fn clear_screen_pass() -> Result<(), wgpu::SurfaceError> {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: wgpu.backing_buffer.view(),
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -598,10 +717,13 @@ fn clear_screen_pass() -> Result<(), wgpu::SurfaceError> {
                             b: 0.0,
                             a: 1.0,
                         }),
-                        store: true,
+                        store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
             });
         }
 
@@ -610,14 +732,11 @@ fn clear_screen_pass() -> Result<(), wgpu::SurfaceError> {
 
         Ok(())
     } else {
-        Err(wgpu::SurfaceError::OutOfMemory)
+        Err("WebGPU backend not initialized".into())
     }
 }
 
-fn take_screenshot(filename: &str, wgpu: &WgpuLink, bterm: &BTerm, texture: &wgpu::Texture) {
-    use std::fs::File;
-    use std::io::Write;
-
+fn take_screenshot(_filename: &str, wgpu: &WgpuLink, bterm: &BTerm, texture: &wgpu::Texture) {
     let w = (bterm.width_pixels as f32) as usize;
     let h = (bterm.height_pixels as f32) as usize;
     //println!("Taking screenshot {} = {}x{}", filename, w, h);
@@ -643,14 +762,11 @@ fn take_screenshot(filename: &str, wgpu: &WgpuLink, bterm: &BTerm, texture: &wgp
     //println!("Copying texture to buffer");
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &output_buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(
-                    std::num::NonZeroU32::new(buffer_dimensions.padded_bytes_per_row as u32)
-                        .unwrap(),
-                ),
+                bytes_per_row: Some(buffer_dimensions.padded_bytes_per_row as u32),
                 rows_per_image: None,
             },
         },
@@ -696,7 +812,6 @@ fn take_screenshot(filename: &str, wgpu: &WgpuLink, bterm: &BTerm, texture: &wgp
 struct BufferDimensions {
     width: usize,
     height: usize,
-    unpadded_bytes_per_row: usize,
     padded_bytes_per_row: usize,
 }
 
@@ -710,7 +825,6 @@ impl BufferDimensions {
         Self {
             width,
             height,
-            unpadded_bytes_per_row,
             padded_bytes_per_row,
         }
     }

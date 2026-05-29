@@ -12,6 +12,7 @@ pub mod rex;
 pub use bracket_embedding::prelude::{EMBED, embedded_resource, link_resource};
 
 pub type BResult<T> = anyhow::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+#[allow(unused_imports)]
 pub(crate) use input::clear_input_state;
 pub type FontCharType = u16;
 pub use consoles::console;

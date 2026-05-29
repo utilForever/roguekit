@@ -2,6 +2,7 @@
 
 use super::Framebuffer;
 use crate::hal::scaler::{ScreenScaler, default_gutter_size};
+use std::sync::Arc;
 use wgpu::{Adapter, Device, Instance, Queue, Surface, SurfaceConfiguration};
 use winit::{event_loop::EventLoop, window::Window};
 
@@ -39,7 +40,7 @@ unsafe impl<'a> Sync for PlatformGL<'a> {}
 
 pub struct WrappedContext {
     pub el: EventLoop<()>,
-    pub window: Window,
+    pub window: Arc<Window>,
 }
 
 pub struct InitHints {

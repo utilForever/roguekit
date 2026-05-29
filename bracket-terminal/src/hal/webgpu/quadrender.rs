@@ -73,28 +73,29 @@ impl QuadRender {
             wgpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: None,
-                    bind_group_layouts: &[&texture_bind_group_layout, &uniform_layout],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&texture_bind_group_layout), Some(&uniform_layout)],
+                    immediate_size: 0,
                 });
         let render_pipeline = wgpu
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                multiview: None,
                 label: None,
                 layout: Some(&render_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader.0,
-                    entry_point: "vs_main",
+                    entry_point: Some("vs_main"),
                     buffers: &[quad_buffer.descriptor()],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader.0,
-                    entry_point: "fs_main",
+                    entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: wgpu.config.format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -112,6 +113,8 @@ impl QuadRender {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
+                multiview_mask: None,
+                cache: None,
             });
 
         let uniform = QuadUniform::empty();
@@ -198,8 +201,9 @@ impl QuadRender {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target,
+                    view: target,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.0,
@@ -207,10 +211,13 @@ impl QuadRender {
                             b: 0.0,
                             a: 1.0,
                         }),
-                        store: true,
+                        store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
             });
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &bind_group, &[]);
