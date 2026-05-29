@@ -144,6 +144,33 @@ fn map_keycode(code: KeyCode) -> Option<crate::hal::VirtualKeyCode> {
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::map_keycode;
+    use crate::hal::VirtualKeyCode;
+    use winit::keyboard::KeyCode;
+
+    #[test]
+    fn maps_representative_keys() {
+        assert_eq!(map_keycode(KeyCode::KeyA), Some(VirtualKeyCode::A));
+        assert_eq!(map_keycode(KeyCode::ArrowLeft), Some(VirtualKeyCode::Left));
+        assert_eq!(map_keycode(KeyCode::Numpad8), Some(VirtualKeyCode::Numpad8));
+        assert_eq!(
+            map_keycode(KeyCode::PrintScreen),
+            Some(VirtualKeyCode::Snapshot)
+        );
+        assert_eq!(
+            map_keycode(KeyCode::NumpadEnter),
+            Some(VirtualKeyCode::NumpadEnter)
+        );
+    }
+
+    #[test]
+    fn returns_none_for_unmapped_keys() {
+        assert_eq!(map_keycode(KeyCode::SuperLeft), None);
+    }
+}
+
 pub fn main_loop<GS: GameState>(mut bterm: BTerm, mut gamestate: GS) -> BResult<()> {
     let now = Instant::now();
     let mut prev_seconds = now.elapsed().as_secs();
@@ -475,10 +502,11 @@ fn tock<GS: GameState>(
     // backing buffer/post-process
     {
         let mut be = BACKEND.lock();
+        let screenshot_request = be.request_screenshot.clone();
+        let mut clear_screenshot_request = false;
         if let Some(wgpu) = be.wgpu.as_ref() {
             match wgpu.surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(current_tex)
-                | wgpu::CurrentSurfaceTexture::Suboptimal(current_tex) => {
+                wgpu::CurrentSurfaceTexture::Success(current_tex) => {
                     backing_flip.update_uniform(
                         wgpu,
                         bterm.post_scanlines,
@@ -488,13 +516,32 @@ fn tock<GS: GameState>(
                     let target = current_tex
                         .texture
                         .create_view(&TextureViewDescriptor::default());
-                    if backing_flip.render(&wgpu, &target).is_ok() {
-                        if let Some(filename) = &be.request_screenshot {
-                            take_screenshot(filename, &wgpu, bterm, &wgpu.backing_buffer.texture);
+                    if backing_flip.render(wgpu, &target).is_ok() {
+                        if let Some(filename) = &screenshot_request {
+                            take_screenshot(filename, wgpu, bterm, &wgpu.backing_buffer.texture);
                         }
-                        be.request_screenshot = None;
+                        clear_screenshot_request = true;
                         current_tex.present();
                     }
+                }
+                wgpu::CurrentSurfaceTexture::Suboptimal(current_tex) => {
+                    backing_flip.update_uniform(
+                        wgpu,
+                        bterm.post_scanlines,
+                        bterm.post_screenburn,
+                        bterm.screen_burn_color,
+                    );
+                    let target = current_tex
+                        .texture
+                        .create_view(&TextureViewDescriptor::default());
+                    if backing_flip.render(wgpu, &target).is_ok() {
+                        if let Some(filename) = &screenshot_request {
+                            take_screenshot(filename, wgpu, bterm, &wgpu.backing_buffer.texture);
+                        }
+                        clear_screenshot_request = true;
+                        current_tex.present();
+                    }
+                    wgpu.surface.configure(&wgpu.device, &wgpu.config);
                 }
                 wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                     wgpu.surface.configure(&wgpu.device, &wgpu.config);
@@ -503,6 +550,9 @@ fn tock<GS: GameState>(
                 | wgpu::CurrentSurfaceTexture::Occluded
                 | wgpu::CurrentSurfaceTexture::Validation => {}
             }
+        }
+        if clear_screenshot_request {
+            be.request_screenshot = None;
         }
     }
 }
