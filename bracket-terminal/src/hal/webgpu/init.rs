@@ -5,8 +5,9 @@ use crate::{
     BResult, gamestate::BTerm, hal::Framebuffer, hal::scaler::ScreenScaler,
     prelude::BACKEND_INTERNAL,
 };
+use std::sync::Arc;
 use wgpu::{Adapter, Device, Instance, Queue, Surface, SurfaceConfiguration};
-use winit::{dpi::LogicalSize, event_loop::EventLoop, window::Window};
+use winit::{event_loop::EventLoop, window::Window};
 
 pub fn init_raw<S: ToString>(
     width_pixels: u32,
@@ -21,10 +22,11 @@ pub fn init_raw<S: ToString>(
         .with_min_inner_size(scaler.new_window_size())
         .with_inner_size(scaler.new_window_size());
 
-    let window = el.create_window(wb)?;
+    #[allow(deprecated)]
+    let window = Arc::new(el.create_window(wb)?);
 
     let (instance, surface, adapter, device, queue, config) =
-        pollster::block_on(init_adapter(&window));
+        pollster::block_on(init_adapter(window.clone()))?;
 
     // Shaders
     let mut shaders: Vec<Shader> = Vec::new();
@@ -56,7 +58,7 @@ pub fn init_raw<S: ToString>(
     scaler.change_logical_size(width_pixels, height_pixels, initial_dpi_factor as f32);
     let backing_buffer = Framebuffer::new(
         &device,
-        surface.get_supported_formats(&adapter)[0],
+        config.format,
         scaler.logical_size.0,
         scaler.logical_size.1,
     );
@@ -105,52 +107,45 @@ pub fn init_raw<S: ToString>(
 }
 
 async fn init_adapter(
-    window: &Window,
-) -> (
+    window: Arc<Window>,
+) -> BResult<(
     Instance,
-    Surface,
+    Surface<'static>,
     Adapter,
     Device,
     Queue,
     SurfaceConfiguration,
-) {
+)> {
     let size = window.inner_size();
 
     // The instance is a handle to our GPU
     // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
-    let instance = wgpu::Instance::new(wgpu::Backends::all());
-    let surface = unsafe { instance.create_surface(window) };
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let surface = instance.create_surface(window)?;
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
         })
-        .await
-        .unwrap();
+        .await?;
 
     let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                features: wgpu::Features::empty(),
-                limits: wgpu::Limits::default(),
-                label: None,
-            },
-            None, // Trace path
-        )
-        .await
-        .unwrap();
+        .request_device(&wgpu::DeviceDescriptor {
+            label: None,
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        })
+        .await?;
 
     //println!("{:?}", adapter.get_info());
-
-    let config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: surface.get_supported_formats(&adapter)[0],
-        width: size.width,
-        height: size.height,
-        present_mode: wgpu::PresentMode::Fifo,
-    };
+    let config = surface
+        .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+        .ok_or_else(|| "Failed to create default webgpu surface configuration".to_string())?;
     surface.configure(&device, &config);
 
-    (instance, surface, adapter, device, queue, config)
+    Ok((instance, surface, adapter, device, queue, config))
 }

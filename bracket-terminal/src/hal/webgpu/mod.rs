@@ -1,5 +1,9 @@
 //! Provides wgpu support back-end.
 
+#[path = "../dummy/keycodes.rs"]
+mod keycodes;
+pub use keycodes::VirtualKeyCode;
+
 mod platform;
 pub use platform::*;
 mod init;
@@ -12,8 +16,6 @@ mod backend;
 pub use backend::*;
 mod mainloop;
 pub use mainloop::*;
-pub use winit::keyboard::KeyCode;
-pub use winit::keyboard::KeyCode as VirtualKeyCode;
 mod backing;
 pub(crate) use backing::*;
 mod framebuffer;

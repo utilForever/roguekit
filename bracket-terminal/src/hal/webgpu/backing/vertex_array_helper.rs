@@ -61,7 +61,7 @@ where
     }
 
     /// Create a vertex buffer descriptor for pipelines.
-    pub fn descriptor(&self) -> wgpu::VertexBufferLayout {
+    pub fn descriptor(&self) -> wgpu::VertexBufferLayout<'_> {
         wgpu::VertexBufferLayout {
             array_stride: self.total_size,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -72,9 +72,7 @@ where
     /// If a previous buffer exists, drop it.
     /// Map the backing store to a new vertex array.
     pub fn build(&mut self, wgpu: &WgpuLink) {
-        if let Some(buf) = &mut self.buffer {
-            std::mem::drop(buf);
-        }
+        self.buffer = None;
         self.buffer = Some(
             wgpu.device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -86,7 +84,7 @@ where
     }
 
     /// Maps the vertex buffer to a render-friendly slice.
-    pub fn slice(&self) -> wgpu::BufferSlice {
+    pub fn slice(&self) -> wgpu::BufferSlice<'_> {
         self.buffer.as_ref().unwrap().slice(..)
     }
 }

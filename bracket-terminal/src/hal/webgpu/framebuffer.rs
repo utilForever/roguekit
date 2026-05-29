@@ -25,6 +25,7 @@ impl Framebuffer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -33,12 +34,12 @@ impl Framebuffer {
             address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            lod_min_clamp: -100.0,
-            lod_max_clamp: 100.0,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 32.0,
             compare: None,
             label: None,
-            anisotropy_clamp: None,
+            anisotropy_clamp: 1,
             ..Default::default()
         });
 
