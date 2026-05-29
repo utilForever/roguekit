@@ -505,50 +505,38 @@ fn tock<GS: GameState>(
         let screenshot_request = be.request_screenshot.clone();
         let mut clear_screenshot_request = false;
         if let Some(wgpu) = be.wgpu.as_ref() {
-            match wgpu.surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(current_tex) => {
-                    backing_flip.update_uniform(
-                        wgpu,
-                        bterm.post_scanlines,
-                        bterm.post_screenburn,
-                        bterm.screen_burn_color,
-                    );
-                    let target = current_tex
-                        .texture
-                        .create_view(&TextureViewDescriptor::default());
-                    if backing_flip.render(wgpu, &target).is_ok() {
-                        if let Some(filename) = &screenshot_request {
-                            take_screenshot(filename, wgpu, bterm, &wgpu.backing_buffer.texture);
-                        }
-                        clear_screenshot_request = true;
-                        current_tex.present();
-                    }
-                }
-                wgpu::CurrentSurfaceTexture::Suboptimal(current_tex) => {
-                    backing_flip.update_uniform(
-                        wgpu,
-                        bterm.post_scanlines,
-                        bterm.post_screenburn,
-                        bterm.screen_burn_color,
-                    );
-                    let target = current_tex
-                        .texture
-                        .create_view(&TextureViewDescriptor::default());
-                    if backing_flip.render(wgpu, &target).is_ok() {
-                        if let Some(filename) = &screenshot_request {
-                            take_screenshot(filename, wgpu, bterm, &wgpu.backing_buffer.texture);
-                        }
-                        clear_screenshot_request = true;
-                        current_tex.present();
-                    }
-                    wgpu.surface.configure(&wgpu.device, &wgpu.config);
-                }
+            let (current_tex, reconfigure) = match wgpu.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(t) => (Some(t), false),
+                wgpu::CurrentSurfaceTexture::Suboptimal(t) => (Some(t), true),
                 wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                     wgpu.surface.configure(&wgpu.device, &wgpu.config);
+                    (None, false)
                 }
                 wgpu::CurrentSurfaceTexture::Timeout
                 | wgpu::CurrentSurfaceTexture::Occluded
-                | wgpu::CurrentSurfaceTexture::Validation => {}
+                | wgpu::CurrentSurfaceTexture::Validation => (None, false),
+            };
+
+            if let Some(current_tex) = current_tex {
+                backing_flip.update_uniform(
+                    wgpu,
+                    bterm.post_scanlines,
+                    bterm.post_screenburn,
+                    bterm.screen_burn_color,
+                );
+                let target = current_tex
+                    .texture
+                    .create_view(&TextureViewDescriptor::default());
+                if backing_flip.render(wgpu, &target).is_ok() {
+                    if let Some(filename) = &screenshot_request {
+                        take_screenshot(filename, wgpu, bterm, &wgpu.backing_buffer.texture);
+                    }
+                    clear_screenshot_request = true;
+                    current_tex.present();
+                }
+                if reconfigure {
+                    wgpu.surface.configure(&wgpu.device, &wgpu.config);
+                }
             }
         }
         if clear_screenshot_request {
