@@ -65,6 +65,7 @@
 
 mod angle;
 mod angles;
+mod capsule;
 mod circle_bresenham;
 mod curve;
 mod distance;
@@ -80,6 +81,7 @@ mod rectf;
 pub mod prelude {
     pub use crate::angle::*;
     pub use crate::angles::*;
+    pub use crate::capsule::*;
     pub use crate::circle_bresenham::*;
     pub use crate::curve::*;
     pub use crate::distance::*;
