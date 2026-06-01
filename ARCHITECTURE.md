@@ -70,7 +70,7 @@ flowchart LR
 | `rltk`                     | Backward-compatible facade that maps legacy names onto `bracket-lib`                         | `bracket-lib`, tutorial/legacy codebases                                |
 | `bracket-bevy`             | Bevy-oriented CP437/ASCII integration entry point                                            | `bevy`, `bracket-color`, `bracket-geometry`, `bracket-random`           |
 | `bracket-terminal`         | Terminal runtime, frame loop, input, and backend-specific rendering                          | `bracket-color`, `bracket-geometry`, `bracket-rex`, `bracket-embedding` |
-| `bracket-pathfinding`      | A\*, Dijkstra, and FOV over user-provided map traits                                         | `bracket-algorithm-traits`, `bracket-geometry`                          |
+| `bracket-pathfinding`      | A\*, Dijkstra, Floyd-Warshall and FOV over user-provided map traits                                         | `bracket-algorithm-traits`, `bracket-geometry`                          |
 | `bracket-algorithm-traits` | Abstractions (`Algorithm2D/3D`, `BaseMap`) that decouple algorithms from storage layout      | `bracket-geometry`, `bracket-pathfinding`                               |
 | `bracket-noise`            | Noise generation utilities (FastNoise-style)                                                 | `bracket-random`                                                        |
 | `bracket-geometry`         | Points, rectangles, lines, circles, and distance helpers                                     | `bracket-algorithm-traits`, `bracket-pathfinding`, `bracket-terminal`   |

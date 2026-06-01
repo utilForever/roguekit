@@ -105,6 +105,19 @@ Once you have the map, you can access individual distances at `flow_map.map` - o
 
 The example `dijkstra` demonstrates this.
 
+## Floyd-Warshall Mapping 
+
+Bracket-lib also includes Floyd-Warshall maps. Unlike Dijkstra maps, Floyd-Warshall computes the shortest path between every pair of points on the map.
+
+```rust
+let flow_map = FloydWarshallMap::new(MAP_WIDTH, MAP_HEIGHT, &map, 1024.0);
+```
+
+Once you have the map, you can use helper functions such as `find_highest_exit` and `find_lowest_exit` to assist with path-finding, similarly to Dijkstra maps.
+
+Warning: Floyd-Warshall has a significantly higher computational cost than Dijkstra mapping. Large maps may take a long time to generate and can consume a considerable amount of memory.
+
+
 ## Field of View (2D only for now)
 
 With `is_opaque` defined for your `BaseMap` trait, obtaining a set of all visible tiles is easy:
@@ -121,10 +134,11 @@ If you enable the `threaded` feature, some Dijkstra functions will use a multi-t
 
 ## Examples
 
-There are three examples (ignore `common.rs` - it's shared code):
+There are four examples (ignore `common.rs` - it's shared code):
 
 * `astar` (`cargo run --example astar`), demonstrating A-Star pathing across a random map.
 * `dijkstra` (`cargo run --example dijkstra`), demonstrating Dijkstra mapping to two targets.
+* `floyd warshall` (`cargo run --example floyd_warshall`), demonstrating all-pairs shortest-path mapping on a random map.
 * `fov` (`cargo run --example fov`), demonstrating field-of-view generation.
 
 These use `crossterm` for rendering to your terminal.
