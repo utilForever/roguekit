@@ -16,7 +16,7 @@ license = "MIT"
 parsing = ["bracket-random/parsing"]
 
 [dependencies]
-bevy = { version = "0.18.1", default-features = false, features = [
+bevy = { version = "0.19.0", default-features = false, features = [
     "bevy_animation",
     "bevy_asset",
     "bevy_camera",
