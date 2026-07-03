@@ -63,7 +63,7 @@ web-sys = { version = "0.3", features=["console", "Attr", "CanvasRenderingContex
     "EventTarget", "HtmlCanvasElement", "HtmlElement", "HtmlInputElement", "Node", "Text", "Window", "KeyboardEvent",
     "MouseEvent"] }
 wasm-bindgen = "0.2"
-rand = { version = "0.8", default-features = false }
+rand = { version = "0.10", default-features = false }
 console_error_panic_hook = "0.1.6"
 winit = { version = "0.30" }
 web-time = "1.1.0"
