@@ -22,7 +22,7 @@ bracket-rex = { path = "../bracket-rex", version = "~0.8" }
 bracket-embedding = { path = "../bracket-embedding", version = "~0.8" }
 lazy_static = "1.4.0"
 object-pool = "0.6.0"
-glow = { version = "~0.17", optional = true }
+glow = { version = "~0.18", optional = true }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
 png = { version = "0.18", optional = true }
 crossterm = { version = "~0.25", optional = true }
