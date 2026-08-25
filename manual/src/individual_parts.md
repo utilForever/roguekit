@@ -6,7 +6,7 @@
 * `bracket-color` defines how the library handles color, and includes functions for grayscale, RGB/RGBA/HSV conversion, a lot of named colors, and general color management support.
 * `bracket-geometry` provides points, lines, rectangles and circle support.
 * `bracket-noise` provides Perlin, Simplex, White and other noise functions useful for randomly generating things.
-* `bracket-pathfinding` provides an A-Star and a Dijkstra mapping solution.
+* `bracket-pathfinding` provides A-Star, BFS and Dijkstra mapping solutions.
 * `bracket-random` provides an easy-to-use wrapper to a random number generator.
 * `bracket-terminal` provides console rendering and support.
 

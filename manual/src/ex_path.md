@@ -16,6 +16,12 @@ Demonstrates using Manhattan distances in A-Star, rather than regular Pythagoras
 
 ![](./ex_path_astar_manhattan.jpg)
 
+### bfs
+
+[Source Code](https://github.com/amethyst/bracket-lib/tree/master/bracket-pathfinding/examples/bfs)
+
+Demonstrates the usage of BFS maps for unweighted flow mapping to multiple starting points.
+
 ### dijkstra
 
 [Source Code](https://github.com/amethyst/bracket-lib/tree/master/bracket-pathfinding/examples/dijkstra)

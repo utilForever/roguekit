@@ -37,7 +37,7 @@ pub mod noise {
     pub use bracket_noise::prelude::*;
 }
 /// bracket-pathfinding (in conjunction with bracket-algorithm-traits) provides
-/// pathfinding functionality. A-Star (A*) and Dijkstra are supported. It also
+/// pathfinding functionality. A-Star (A*), BFS and Dijkstra are supported. It also
 // provides field of view (FOV) functionality.
 pub mod pathfinding {
     pub use bracket_pathfinding::prelude::*;

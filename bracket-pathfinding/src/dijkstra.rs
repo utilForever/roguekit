@@ -3,7 +3,8 @@ use bracket_algorithm_traits::prelude::BaseMap;
 use rayon::prelude::*;
 #[allow(unused_imports)]
 use smallvec::SmallVec;
-use std::collections::VecDeque;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::convert::TryInto;
 
 /// Representation of a Dijkstra flow map.
@@ -23,6 +24,36 @@ struct ParallelDm {
     map: Vec<f32>,
     max_depth: f32,
     starts: Vec<usize>,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct DijkstraNode {
+    idx: usize,
+    cost: f32,
+}
+
+impl PartialEq for DijkstraNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.idx == other.idx && self.cost == other.cost
+    }
+}
+
+impl Eq for DijkstraNode {}
+
+impl Ord for DijkstraNode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .cost
+            .partial_cmp(&self.cost)
+            .unwrap()
+            .then_with(|| self.idx.cmp(&other.idx))
+    }
+}
+
+impl PartialOrd for DijkstraNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 // This is chosen arbitrarily. Whether it's better to
@@ -137,58 +168,40 @@ impl DijkstraMap {
     /// Builds the Dijkstra map: iterate from each starting point, to each exit provided by BaseMap's
     /// exits implementation. Each step adds cost to the current depth, and is discarded if the new
     /// depth is further than the current depth.
-    /// WARNING: Will give incorrect results when used with non-uniform exit costs. Much slower
-    /// algorithm required to support that.
     /// Automatically branches to a parallel version if you provide more than 4 starting points
     pub fn build(dm: &mut DijkstraMap, starts: &[usize], map: &dyn BaseMap) {
         let threaded = DijkstraMap::build_helper(dm, starts, map);
         if threaded == RunThreaded::True {
             return;
         }
-        let mapsize: usize = dm.size_x * dm.size_y;
-        let mut open_list: VecDeque<(usize, f32)> = VecDeque::with_capacity(mapsize);
 
-        for start in starts {
-            dm.map[*start] = f32::min(dm.map[*start], 0.0);
-            open_list.push_back((*start, 0.0));
-        }
-
-        while let Some((tile_idx, depth)) = open_list.pop_front() {
-            let exits = map.get_available_exits(tile_idx);
-            for (new_idx, add_depth) in exits {
-                let new_depth = depth + add_depth;
-                let prev_depth = dm.map[new_idx];
-                if new_depth >= prev_depth {
-                    continue;
-                }
-                if new_depth >= dm.max_depth {
-                    continue;
-                }
-                dm.map[new_idx] = new_depth;
-                open_list.push_back((new_idx, new_depth));
-            }
-        }
+        let weighted_starts: Vec<(usize, f32)> = starts.iter().map(|start| (*start, 0.0)).collect();
+        DijkstraMap::build_weighted(dm, &weighted_starts, map);
     }
 
     /// Builds the Dijkstra map: iterate from each starting point, to each exit provided by BaseMap's
     /// exits implementation. Each step adds cost to the current depth, and is discarded if the new
     /// depth is further than the current depth.
-    /// WARNING: Will give incorrect results when used with non-uniform exit costs. Much slower
-    /// algorithm required to support that.
-    /// Automatically branches to a parallel version if you provide more than 4 starting points
     pub fn build_weighted(dm: &mut DijkstraMap, starts: &[(usize, f32)], map: &dyn BaseMap) {
         let mapsize: usize = dm.size_x * dm.size_y;
-        let mut open_list: VecDeque<(usize, f32)> = VecDeque::with_capacity(mapsize);
+        let mut open_list: BinaryHeap<DijkstraNode> = BinaryHeap::with_capacity(mapsize);
 
-        for start in starts {
-            dm.map[start.0] = f32::min(dm.map[start.0], start.1);
-            open_list.push_back(*start);
+        for (start, cost) in starts.iter().copied() {
+            if cost >= dm.map[start] || cost >= dm.max_depth {
+                continue;
+            }
+            dm.map[start] = cost;
+            open_list.push(DijkstraNode { idx: start, cost });
         }
 
-        while let Some((tile_idx, depth)) = open_list.pop_front() {
-            let exits = map.get_available_exits(tile_idx);
+        while let Some(node) = open_list.pop() {
+            if node.cost > dm.map[node.idx] {
+                continue;
+            }
+
+            let exits = map.get_available_exits(node.idx);
             for (new_idx, add_depth) in exits {
-                let new_depth = depth + add_depth;
+                let new_depth = node.cost + add_depth;
                 let prev_depth = dm.map[new_idx];
                 if new_depth >= prev_depth {
                     continue;
@@ -197,7 +210,10 @@ impl DijkstraMap {
                     continue;
                 }
                 dm.map[new_idx] = new_depth;
-                open_list.push_back((new_idx, new_depth));
+                open_list.push(DijkstraNode {
+                    idx: new_idx,
+                    cost: new_depth,
+                });
             }
         }
     }
@@ -205,7 +221,7 @@ impl DijkstraMap {
     /// Implementation of Parallel Dijkstra.
     #[cfg(feature = "threaded")]
     fn build_parallel(dm: &mut DijkstraMap, starts: &[usize], map: &dyn BaseMap) {
-        let mapsize: usize = (dm.size_x * dm.size_y) as usize;
+        let mapsize: usize = dm.size_x * dm.size_y;
         let mut layers: Vec<ParallelDm> = Vec::with_capacity(starts.len());
         for start_chunk in starts.chunks(rayon::current_num_threads()) {
             let mut layer = ParallelDm {
@@ -213,9 +229,7 @@ impl DijkstraMap {
                 max_depth: dm.max_depth,
                 starts: Vec::new(),
             };
-            layer
-                .starts
-                .extend(start_chunk.iter().copied().map(|x| x as usize));
+            layer.starts.extend(start_chunk.iter().copied());
             layers.push(layer);
         }
 
@@ -225,18 +239,28 @@ impl DijkstraMap {
 
         // Run each map in parallel
         layers.par_iter_mut().for_each(|l| {
-            let mut open_list: VecDeque<(usize, f32)> = VecDeque::with_capacity(mapsize);
+            let mut open_list: BinaryHeap<DijkstraNode> = BinaryHeap::with_capacity(mapsize);
 
             for start in l.starts.iter().copied() {
-                l.map[start] = f32::min(l.map[start], 0.0);
-                open_list.push_back((start, 0.0));
+                if 0.0 >= l.map[start] || 0.0 >= l.max_depth {
+                    continue;
+                }
+                l.map[start] = 0.0;
+                open_list.push(DijkstraNode {
+                    idx: start,
+                    cost: 0.0,
+                });
             }
 
-            while let Some((tile_idx, depth)) = open_list.pop_front() {
-                let exits = &exits[tile_idx];
+            while let Some(node) = open_list.pop() {
+                if node.cost > l.map[node.idx] {
+                    continue;
+                }
+
+                let exits = &exits[node.idx];
                 for (new_idx, add_depth) in exits {
                     let new_idx = *new_idx;
-                    let new_depth = depth + add_depth;
+                    let new_depth = node.cost + add_depth;
                     let prev_depth = l.map[new_idx];
                     if new_depth >= prev_depth {
                         continue;
@@ -245,7 +269,10 @@ impl DijkstraMap {
                         continue;
                     }
                     l.map[new_idx] = new_depth;
-                    open_list.push_back((new_idx, new_depth));
+                    open_list.push(DijkstraNode {
+                        idx: new_idx,
+                        cost: new_depth,
+                    });
                 }
             }
         });
@@ -352,6 +379,18 @@ mod test {
             }
         }
     }
+
+    struct WeightedShortcutMap;
+    impl BaseMap for WeightedShortcutMap {
+        fn get_available_exits(&self, idx: usize) -> SmallVec<[(usize, f32); 10]> {
+            match idx {
+                0 => smallvec![(1, 10.0), (2, 1.0)],
+                2 => smallvec![(1, 1.0)],
+                _ => smallvec![],
+            }
+        }
+    }
+
     #[test]
     fn test_new() {
         let map = MiniMap {};
@@ -414,5 +453,15 @@ mod test {
         assert_eq!(target, Some(1));
         let target = DijkstraMap::find_highest_exit(&exits_map, 1, &map);
         assert_eq!(target, Some(2));
+    }
+
+    #[test]
+    fn dijkstra_follows_lowest_total_cost() {
+        let map = WeightedShortcutMap;
+        let dijkstra = DijkstraMap::new(3, 1, &[0], &map, 10.0);
+
+        assert_eq!(dijkstra.map[0], 0.0);
+        assert_eq!(dijkstra.map[1], 2.0);
+        assert_eq!(dijkstra.map[2], 1.0);
     }
 }

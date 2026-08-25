@@ -1,6 +1,6 @@
 # bracket-pathfinding
 
-This crate is part of the overall `bracket-lib` system, and (in conjunction with `bracket-algorithm-traits`) provides pathfinding functionality. A-Star (A*) and Dijkstra are supported. It also provides field of view (FOV) functionality.
+This crate is part of the overall `bracket-lib` system, and (in conjunction with `bracket-algorithm-traits`) provides pathfinding functionality. A-Star (A*), breadth-first search (BFS), and Dijkstra are supported. It also provides field of view (FOV) functionality.
 
 ## Trait Implementation
 
@@ -26,7 +26,7 @@ impl BaseMap for Map {
 }
 ```
 
-Dijkstra and A-Star need to know what exits are valid from a tile, and the "cost" of moving to that tile (most of the time you can use `1.0`). For example:
+BFS, Dijkstra and A-Star need to know what exits are valid from a tile. Dijkstra and A-Star use the "cost" of moving to that tile (most of the time you can use `1.0`), while BFS treats each exit as one step. For example:
 
 ```rust
 impl BaseMap for Map {
@@ -88,6 +88,23 @@ let path = a_star_search(
 
 The example `astar` demonstrates this.
 
+## BFS Mapping
+
+Bracket-lib includes BFS maps for unweighted flow mapping. BFS can include as many search targets as you want, and treats each valid exit as one step regardless of the exit cost.
+
+To generate a BFS map, you need a vector of target tile indices. You can then make the map:
+
+```rust
+let mut search_targets : Vec<usize> = Vec::new();
+search_targets.push(map.point2d_to_index(START_POINT));
+search_targets.push(map.point2d_to_index(END_POINT));
+let flow_map = BfsMap::new(MAP_WIDTH, MAP_HEIGHT, &search_targets, &map, 1024.0);
+```
+
+Once you have the map, you can access individual distances at `flow_map.map` - or you can use helper functions such as `find_highest_exit` and `find_lowest_exit` to help with path-finding.
+
+The example `bfs` demonstrates this.
+
 ## Dijkstra Mapping
 
 Bracket-lib also includes Dijkstra maps, that can include as many search targets as you want. See [The Incredible Power of Dijkstra Maps](http://www.roguebasin.com/index.php?title=The_Incredible_Power_of_Dijkstra_Maps) for some ideas as to what you can do with this.
@@ -101,7 +118,7 @@ search_targets.push(map.point2d_to_index(END_POINT));
 let flow_map = DijkstraMap::new(MAP_WIDTH, MAP_HEIGHT, &search_targets, &map, 1024.0);
 ```
 
-Once you have the map, you can access individual distances at `flow_map.map` - or you can use various helper functions such as `find_highest_exist` and `find_lowest_exit` to help with path-finding.
+Once you have the map, you can access individual distances at `flow_map.map` - or you can use helper functions such as `find_highest_exit` and `find_lowest_exit` to help with path-finding.
 
 The example `dijkstra` demonstrates this.
 
@@ -117,14 +134,17 @@ You can see this in action with the example `fov`.
 
 ## Feature Flags
 
-If you enable the `threaded` feature, some Dijkstra functions will use a multi-threaded algorithm.
+If you enable the `threaded` feature, some BFS and Dijkstra functions will use a multi-threaded algorithm.
 
 ## Examples
 
-There are three examples (ignore `common.rs` - it's shared code):
+There are six examples (ignore `common.rs` - it's shared code):
 
 * `astar` (`cargo run --example astar`), demonstrating A-Star pathing across a random map.
+* `astar_manhattan` (`cargo run --example astar_manhattan`), demonstrating A-Star pathing with Manhattan distance.
+* `bfs` (`cargo run --example bfs`), demonstrating BFS mapping to two targets.
 * `dijkstra` (`cargo run --example dijkstra`), demonstrating Dijkstra mapping to two targets.
+* `dijkstra_weighted` (`cargo run --example dijkstra_weighted`), demonstrating weighted Dijkstra mapping.
 * `fov` (`cargo run --example fov`), demonstrating field-of-view generation.
 
 These use `crossterm` for rendering to your terminal.
